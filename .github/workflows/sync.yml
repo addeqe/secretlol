@@ -46,7 +46,12 @@ jobs:
         run: npm run sync
       - name: Refresh ingredient connections
         if: ${{ !inputs.connection_check }}
-        run: npm run ingredients:refresh
+        run: |
+          if [ "${{ inputs.connections_only }}" = "true" ]; then
+            npm run ingredients:refresh
+          else
+            npm run ingredients:refresh -- --after-catalogue data/last-publication-report.json
+          fi
       - name: Check database without collection
         if: ${{ inputs.connection_check }}
         run: |

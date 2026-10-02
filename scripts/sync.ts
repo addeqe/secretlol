@@ -49,7 +49,10 @@ try {
       console.log(JSON.stringify({ ...report, published: false, preview: 'data/catalog-preview.json' }, null, 2));
     } else {
       if (!database) throw new Error('Database is not connected');
-      console.log(JSON.stringify(await publish(database, scan, { allowShrink: args.includes('--allow-shrink') }), null, 2));
+      const publication=await publish(database, scan, { allowShrink: args.includes('--allow-shrink') });
+      const metered={...publication,...(database instanceof D1DatabaseClient?{rowsWritten:database.rowsWritten}:{} )};
+      writeFileSync(resolve('data/last-publication-report.json'),JSON.stringify(metered,null,2));
+      console.log(JSON.stringify(metered, null, 2));
     }
   }
 } catch (error) {

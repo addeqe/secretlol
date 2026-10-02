@@ -12,7 +12,7 @@ When a compatible product is discontinued, unavailable, stale or no longer cheap
 
 Uploads stage a full new connection version and validate inventory counts and selected product existence before publication. Failed or incomplete uploads retain the previous complete version. Readers can distinguish catalogue-version lag through `connectionsCurrent`; `priceFresh` on lookup additionally checks the selected price expiry. Never use a stale lookup as a live price. Refresh timing is best effort, with failures visible in GitHub Actions and the status endpoint.
 
-The matcher runs in GitHub Actions using Node standard libraries. The existing Worker serves stored results; it does not run matching or call a paid model. No subscription or paid resource was added. Actual database row-write/storage figures are included in each refresh report. The collector and connection refresh share the account's daily free quota even though their per-process counters are separate; other activity on the account also consumes it.
+The matcher runs in GitHub Actions using Node standard libraries. The existing Worker serves stored results; it does not run matching or call a paid model. No subscription or paid resource was added. Actual database row-write/storage figures are included in each refresh report. A normal daily run carries the collector's row-write count into the connection step and reserves capacity for the connection upload before writing. Both steps share an 80,000-write run cap and the account's daily free quota. Separate reruns and other account activity also consume that daily quota; the provider's hard free limit still applies.
 
 ## Private API
 

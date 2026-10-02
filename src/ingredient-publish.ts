@@ -4,6 +4,7 @@ import {rows,D1DatabaseClient} from './database.ts';
 import {buildLinks,summarizeLinks,MATCHER_VERSION} from './ingredient-matching.ts';
 import type {Requirement,Decision} from './ingredient-matching.ts';
 import type {Database,Entry} from './types.ts';
+import {integer} from './config.ts';
 
 export function loadRequirements(){
   const bytes=readFileSync(new URL('../ingredient-data/requirements.json',import.meta.url));
@@ -12,6 +13,9 @@ export function loadRequirements(){
   return {...data,hash:createHash('sha256').update(bytes).digest('hex')};
 }
 export async function refreshIngredientLinks(database:Database, inventory=loadRequirements()){
+  if(database instanceof D1DatabaseClient&&database.rowsWritten+inventory.requirements.length*3+1100>integer('MAX_D1_ROWS_WRITTEN',80000)){
+    throw new Error('Combined catalogue/ingredient refresh would exceed the free write budget; previous connections retained');
+  }
   const id=randomUUID(),now=new Date().toISOString();
   await database.query(`INSERT INTO ingredient_lock VALUES(1,?,?) ON CONFLICT(id) DO UPDATE
     SET owner=excluded.owner,expires_at=excluded.expires_at WHERE ingredient_lock.expires_at < ?`,
