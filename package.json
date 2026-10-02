@@ -1,0 +1,29 @@
+{
+  "name": "willys-catalog",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24.0.0" },
+  "scripts": {
+    "connect": "node scripts/connect.ts",
+    "connect:github": "node scripts/connect-github.ts",
+    "doctor": "node scripts/doctor.ts",
+    "stores": "node scripts/sync.ts --stores",
+    "probe": "node scripts/sync.ts --probe",
+    "sync": "node scripts/sync.ts",
+    "sync:preview": "node scripts/sync.ts --dry-run",
+    "sync:fixture": "node scripts/sync.ts --fixture tests/fixtures/catalog.json --local data/catalog.sqlite",
+    "check": "tsc --noEmit",
+    "test": "node --test tests/*.test.ts",
+    "test:worker": "node scripts/test-worker.ts",
+    "dev": "wrangler dev --local",
+    "deploy": "node scripts/deploy.ts",
+    "db:init": "node scripts/init-db.ts"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "4.20260515.1",
+    "@types/node": "24.10.0",
+    "typescript": "5.9.3",
+    "wrangler": "4.92.0"
+  }
+}

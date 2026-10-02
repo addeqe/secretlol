@@ -1,0 +1,15 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "willys-catalog",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-05-15",
+  "workers_dev": true,
+  "triggers": { "crons": ["17 4 * * *"] },
+  "vars": { "PRICE_MAX_AGE_HOURS": "24" },
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "willys-catalog",
+    "database_id": "00000000-0000-0000-0000-000000000000",
+    "migrations_dir": "migrations"
+  }]
+}

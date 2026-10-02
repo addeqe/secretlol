@@ -1,0 +1,49 @@
+name: Refresh Willys catalogue
+on:
+  workflow_dispatch:
+    inputs:
+      connection_check:
+        description: Check the database connection without collecting Willys products
+        required: false
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: willys-catalog-sync
+  cancel-in-progress: false
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_DATABASE_ID: ${{ secrets.CLOUDFLARE_DATABASE_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      WILLYS_STORE_ID: ${{ vars.WILLYS_STORE_ID || '2110' }}
+      MAX_WILLYS_REQUESTS: '300'
+      MAX_RUN_MINUTES: '55'
+      MAX_PRODUCTS: '20000'
+      MAX_D1_ROWS_WRITTEN: '80000'
+      MAX_D1_SIZE_MB: '400'
+      HISTORY_DAYS: '90'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+      # Runtime has no third-party dependencies. No install or artifact storage.
+      - name: Verify connection settings
+        run: |
+          node -e 'for (const k of ["CLOUDFLARE_ACCOUNT_ID","CLOUDFLARE_DATABASE_ID","CLOUDFLARE_API_TOKEN"]) if (!process.env[k]) throw new Error("Missing "+k)'
+      - name: Collect and publish catalogue
+        if: ${{ !inputs.connection_check }}
+        run: npm run sync
+      - name: Check database without collection
+        if: ${{ inputs.connection_check }}
+        run: |
+          node --input-type=module -e 'import {D1DatabaseClient} from "./src/database.ts"; await new D1DatabaseClient().query("SELECT value FROM catalog_state LIMIT 1"); console.log("D1 connection passed; no retailer requests made.")'
+      - name: Summarize completed scan
+        if: ${{ success() && !inputs.connection_check }}
+        run: |
+          node -e 'const fs=require("fs"); const r=JSON.parse(fs.readFileSync("data/last-scan-report.json")); fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Store ${r.store.storeId}: ${r.products} online products; ${r.requests} requests; completed ${r.completedAt}.\n`)'

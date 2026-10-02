@@ -1,0 +1,7 @@
+{
+  "store": { "storeId": "TEST", "name": "TEST FIXTURE — not a Willys store", "onlineStore": true },
+  "products": [
+    { "code": "TEST_MILK_ST", "name": "TEST Milk", "manufacturer": "TEST", "priceValue": 16.9, "priceUnit": "kr/st", "comparePrice": "11,27 kr", "comparePriceUnit": "l", "depositPrice": "", "online": true, "outOfStock": false, "addToCartDisabled": false, "potentialPromotions": [] },
+    { "code": "TEST_ORANGE_KG", "name": "TEST Orange", "priceValue": 22.9, "priceUnit": "kr/kg", "comparePrice": "22,90 kr", "comparePriceUnit": "kg", "depositPrice": "", "online": true, "outOfStock": false, "addToCartDisabled": false, "potentialPromotions": [] }
+  ]
+}
