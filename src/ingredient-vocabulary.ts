@@ -464,4 +464,14 @@ revise('shrimp',{ambiguous:true});
 food('tomato-diced','canned diced tomatoes|diced tomatoes','^tomater tarnade|^tarnade tomater',shelf);
 food('roquefort-specific','roquefort cheese','^roquefort',dairy);
 food('lentil-brown','brown lentils','^bruna linser|^linser bruna',shelf,'kg',{ambiguous:true});
+// Specific identities must not be shadowed by a generic rule with the same alias.
+revise('tomato-canned',{aliases:['canned tomatoes','canned crushed tomatoes','crushed tomatoes']});
+revise('blue-cheese',{aliases:['blue cheese']});
+revise('lentil-green',{aliases:['lentils','green lentils']});
+revise('almond',{aliases:['almonds','almond']});
+revise('condensed-milk',{aliases:['sweetened condensed milk']});
+revise('condensed-milk-unspecified',{aliases:['condensed milk']});
+revise('cornmeal',{title:'^polenta',aliases:['cornmeal','corn meal']});
+revise('cornmeal-yellow',{title:'^polenta'});
+food('maize-flour','maize flour','^majsmjol',shelf);
 export const FOOD_RULES: readonly FoodRule[] = rules;

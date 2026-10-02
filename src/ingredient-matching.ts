@@ -15,7 +15,7 @@ export type Link = Requirement & { ingredientId: string; foodId: string | null;
   status: 'matched' | 'needs_review' | 'unavailable' | 'non_purchased';
   selectedCode: string | null; selectedProduct: Candidate | null; candidates: Candidate[];
   reason: string; method: string; review?: Decision; matchConfidence: number | null };
-export const MATCHER_VERSION = 'willys-food-rules-1';
+export const MATCHER_VERSION = 'willys-food-rules-2';
 export const normalizeText = (s: string) => s.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
   .replace(/[’']/g, '').replace(/[^a-z0-9%]+/g, ' ').trim().replace(/\s+/g, ' ');
 const prep = /\b(?:finely|coarsely|freshly|chopped|diced|minced|sliced|grated|shredded|peeled|seeded|sifted|softened|melted|beaten|divided|packed|crushed|rinsed|drained|large|medium|small|optional)\b/g;

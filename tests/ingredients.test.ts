@@ -8,6 +8,8 @@ import {refreshIngredientLinks} from '../src/ingredient-publish.ts';
 import {publish} from '../src/publish.ts';
 import {handle} from '../worker/index.ts';
 import type {Entry,Scan,Statement} from '../src/types.ts';
+import {FOOD_RULES} from '../src/ingredient-vocabulary.ts';
+import {normalizeText} from '../src/ingredient-matching.ts';
 
 const date=()=>new Date().toISOString();
 function product(code:string,name:string,price:number,pack:string,category='Mejeri, ost & ägg'):Entry{
@@ -72,6 +74,16 @@ test('ingredient keywords cannot select nut sweets, snack rings, crispbread or m
     product('MIX','Smoothie Jordgubb Banan Blåbär Fryst',1,'500g','Fryst')];
   const links=buildLinks(['hazelnuts','peanuts','dried rosemary','frozen blueberries'].map(name=>({name,occurrences:1})),items);
   assert.deepEqual(links.map(l=>l.selectedCode),['NUT',null,null,null]);
+});
+test('specific shapes and cheeses cannot be shadowed by generic food rules',()=>{
+  const items=[product('CRUSHED','Tomater Krossade',1,'400g','Skafferi'),
+    product('DICED','Tomater Tärnade',20,'400g','Skafferi'),
+    product('BLUE','Blåmögelost',1,'100g'),product('GREEN','Gröna Linser',1,'500g','Skafferi'),
+    product('WHOLE','Mandel Naturell',1,'100g','Skafferi'),product('SLICED','Mandelspån',20,'100g','Skafferi')];
+  const links=buildLinks(['diced tomatoes','Roquefort cheese','brown lentils','slivered almonds'].map(name=>({name,occurrences:1})),items);
+  assert.deepEqual(links.map(l=>l.selectedCode),['DICED',null,null,'SLICED']);
+  const owners=new Map<string,string>();
+  for(const r of FOOD_RULES)for(const alias of r.aliases){const key=normalizeText(alias);assert.ok(!owners.has(key)||owners.get(key)===r.id,`Conflicting identity for ${key}`);owners.set(key,r.id);}
 });
 test('reviews add compatible alternatives and preserve multiple exclusions',()=>{
   const now=date(),a=eggs('A',10,20),b=eggs('B',20,20),c=eggs('C',30,20);
