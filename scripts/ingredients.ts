@@ -12,7 +12,8 @@ try{
   if(after>=0){
     if(!(database instanceof D1DatabaseClient))throw new Error('Combined budget applies to cloud publication only');
     const publication=JSON.parse(readFileSync(process.argv[after+1],'utf8'));
-    if(!Number.isSafeInteger(publication.rowsWritten)||publication.rowsWritten<0||Date.now()-Date.parse(publication.completedAt)>3600000)throw new Error('Invalid or stale catalogue publication budget report');
+    const completedAt=Date.parse(publication.completedAt);
+    if(!Number.isSafeInteger(publication.rowsWritten)||publication.rowsWritten<0||!Number.isFinite(completedAt)||completedAt>Date.now()+60000||Date.now()-completedAt>3600000)throw new Error('Invalid or stale catalogue publication budget report');
     database.rowsWritten=publication.rowsWritten;
     const active=await database.query("SELECT value FROM catalog_state WHERE key='active_snapshot'");
     if(active[0]?.results?.[0]?.value!==publication.snapshotId)throw new Error('Catalogue publication budget report is for a different snapshot');

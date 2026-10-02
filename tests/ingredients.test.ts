@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
-import {LocalDatabase,rows} from '../src/database.ts';
+import {LocalDatabase,D1DatabaseClient,rows} from '../src/database.ts';
 import {normalize} from '../src/products.ts';
 import {buildLinks,packInfo} from '../src/ingredient-matching.ts';
 import {refreshIngredientLinks} from '../src/ingredient-publish.ts';
@@ -16,6 +16,13 @@ function product(code:string,name:string,price:number,pack:string,category='Meje
 const eggs=(code:string,price:number,count:number)=>product(code,`Ägg ${count}p Frigående Medium`,price,`${count}p`);
 const requirements=[{name:'eggs',occurrences:100},{name:'water',occurrences:10},{name:'missing unusual food',occurrences:2}];
 const inv={requirements,recipes:20,ingredientOccurrences:112,hash:'test-inventory'};
+test('the combined free write budget stops an ingredient refresh before any cloud mutation',async()=>{
+  let requests=0;
+  const database=new D1DatabaseClient({accountId:'a'.repeat(32),databaseId:'b'.repeat(36),token:'test-only',fetcher:async()=>{requests++;throw new Error('No request should occur');}});
+  database.rowsWritten=79500;
+  await assert.rejects(refreshIngredientLinks(database,inv),/free write budget/);
+  assert.equal(requests,0);
+});
 function db(){const d=new LocalDatabase(':memory:');for(const f of ['0001_catalog.sql','0002_ingredients.sql'])d.execute(readFileSync(new URL('../migrations/'+f,import.meta.url),'utf8'));return d;}
 function scan(entries:Entry[]):Scan{return {entries,store:{storeId:'2110',name:'Test',onlineStore:true},categories:[],requests:0,startedAt:date(),completedAt:date()};}
 function workerDb(d:LocalDatabase):D1Database{
