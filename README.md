@@ -2,6 +2,8 @@
 
 A daily copy of one Willys online store's exposed catalogue, listed prices, conditional promotions and availability, stored in your own Cloudflare D1 database. A private API supplies the catalogue and fresh pack prices to Matbord or another application.
 
+Ingredient connections are also set up for all **6,438 ingredient names / 3,010,082 records** in the filtered recipe database. Daily catalogue updates now refresh the connections and their cheapest compatible product IDs. See [ingredient API, review screen and local recipe integration](docs/INGREDIENTS.md). The status endpoint reports actual matched coverage and explicit unresolved cases.
+
 **Start with [SETUP.md](SETUP.md).** Run `npm install`, then `npm run connect`. The wizard creates the database, applies the schema, deploys the API, connects GitHub and installs the daily trigger after you supply your service credentials. It does not enable a paid subscription.
 
 Setup saves each valid answer and checkpoints completed operations. After a failure, rerun the same command to continue where it stopped. Existing Cloudflare deployments made with the original wizard are recognized automatically. GitHub setup verifies and selects the repository owner's account before performing repository operations.

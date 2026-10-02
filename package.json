@@ -11,6 +11,8 @@
     "stores": "node scripts/sync.ts --stores",
     "probe": "node scripts/sync.ts --probe",
     "sync": "node scripts/sync.ts",
+    "ingredients:refresh": "node scripts/ingredients.ts",
+    "ingredients:review": "node scripts/ingredient-review.ts",
     "sync:preview": "node scripts/sync.ts --dry-run",
     "sync:fixture": "node scripts/sync.ts --fixture tests/fixtures/catalog.json --local data/catalog.sqlite",
     "check": "tsc --noEmit",

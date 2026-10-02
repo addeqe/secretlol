@@ -1,6 +1,7 @@
 import type { Entry } from '../src/types.ts';
+import { ingredientRoutes } from './ingredients.ts';
 type Env = { DB: D1Database; CATALOG_API_TOKEN: string; PRICE_MAX_AGE_HOURS?: string;
-  GITHUB_REPOSITORY?: string; GITHUB_DISPATCH_TOKEN?: string };
+  GITHUB_REPOSITORY?: string; GITHUB_DISPATCH_TOKEN?: string; INGREDIENT_REVIEW_TOKEN?: string };
 type Snapshot = { id: string; store_id: string; store_name: string; completed_at: string;
   started_at: string; product_count: number; report_json: string };
 const json = (value: unknown, status = 200) => Response.json(value, { status, headers: {
@@ -55,10 +56,13 @@ export async function handle(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   if (url.pathname === '/health' && request.method === 'GET') return json({ service: 'willys-catalog', ok: true });
   if (!env.CATALOG_API_TOKEN || env.CATALOG_API_TOKEN.length < 32) return json({ error: 'service_not_connected' }, 503);
-  if (!authorized(request, env.CATALOG_API_TOKEN)) return json({ error: 'unauthorized' }, 401);
+  const reviewRoute=['/ingredients/review','/ingredients/refresh'].includes(url.pathname);
+  if(reviewRoute&&(!env.INGREDIENT_REVIEW_TOKEN||env.INGREDIENT_REVIEW_TOKEN.length<32))return json({error:'review_not_connected'},503);
+  if (!authorized(request, reviewRoute?env.INGREDIENT_REVIEW_TOKEN!:env.CATALOG_API_TOKEN)) return json({ error: 'unauthorized' }, 401);
   let snapshot = await env.DB.prepare(`SELECT s.* FROM snapshots s
     WHERE s.id=(SELECT value FROM catalog_state WHERE key='active_snapshot') AND s.status='complete'`).first<Snapshot>();
   if (!snapshot) return json({ error: 'catalogue_not_ready', message: 'Run the first catalogue sync.' }, 503);
+  if(url.pathname==='/ingredients'||url.pathname.startsWith('/ingredients/'))return ingredientRoutes(request,env,snapshot,requestJson);
   const ageHours = Number(env.PRICE_MAX_AGE_HOURS ?? 24);
   if (!Number.isFinite(ageHours) || ageHours <= 0 || ageHours > 24) return json({ error: 'invalid_freshness_configuration' }, 503);
   if (url.pathname === '/status' && request.method === 'GET') {

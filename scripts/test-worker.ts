@@ -6,6 +6,8 @@ import { resolve } from 'node:path';
 import { createServer } from 'node:net';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { normalize } from '../src/products.ts';
+import { LocalDatabase } from '../src/database.ts';
+import { refreshIngredientLinks } from '../src/ingredient-publish.ts';
 
 const folder = resolve('data/worker-test'); mkdirSync(folder, { recursive: true });
 const cli = resolve('node_modules/wrangler/bin/wrangler.js');
@@ -16,13 +18,26 @@ const fixture = JSON.parse(readFileSync(new URL('../tests/fixtures/catalog.json'
 const id = randomUUID(), date = new Date().toISOString(), token = 'local-worker-test-token-not-a-production-secret';
 const quote = (value: unknown) => value === null ? 'NULL' : `'${String(value).replace(/'/g, "''")}'`;
 let sql = readFileSync(new URL('../migrations/0001_catalog.sql', import.meta.url), 'utf8');
+sql += readFileSync(new URL('../migrations/0002_ingredients.sql', import.meta.url), 'utf8');
 sql += '\nDELETE FROM catalog_entries; DELETE FROM snapshots; DELETE FROM price_history; DELETE FROM catalog_state;\n';
 sql += `INSERT INTO snapshots VALUES(${[id, fixture.store.storeId, fixture.store.name, date, date, fixture.products.length, 'complete', '{}'].map(quote).join(',')});\n`;
 for (const product of fixture.products) {
-  const entry = normalize(product, 'TEST FIXTURE', date);
+  const entry = normalize({...product,name:product.code==='TEST_MILK_ST'?'Mjölk':product.name}, 'Mejeri, ost & ägg', date);
   sql += `INSERT INTO catalog_entries VALUES(${[id, entry.code, entry.name, entry.brand, entry.priceHash, date, JSON.stringify(entry)].map(quote).join(',')});\n`;
 }
 sql += `INSERT INTO catalog_state VALUES('active_snapshot',${quote(id)});\n`;
+// Seed through the real matcher/publication code, then transfer just its tables.
+const connections = new LocalDatabase(':memory:');
+connections.execute(sql);
+await refreshIngredientLinks(connections, { requirements: [{name:'milk',occurrences:10},{name:'water',occurrences:2}],
+  recipes:2,ingredientOccurrences:12,hash:'runtime-test' });
+for(const table of ['ingredient_runs','ingredient_links','ingredient_change_history']){
+  sql += `DELETE FROM ${table};\n`;
+  for(const row of connections.db.prepare(`SELECT * FROM ${table}`).all())sql += `INSERT INTO ${table} VALUES(${Object.values(row).map(quote).join(',')});\n`;
+}
+const active = connections.db.prepare("SELECT value FROM catalog_state WHERE key='active_ingredient_run'").get()!;
+sql += `INSERT INTO catalog_state VALUES('active_ingredient_run',${quote(active.value)});\n`;
+connections.close();
 const seed = resolve(folder, 'seed.sql'); writeFileSync(seed, sql);
 const seeded = spawnSync(process.execPath, [cli, 'd1', 'execute', 'DB', '--local', '--config', config,
   '--persist-to', folder, '--file', seed], { env, encoding: 'utf8' });
@@ -33,7 +48,8 @@ const port = await new Promise<number>((resolvePort, reject) => {
     server.close(() => resolvePort(chosen)); });
 });
 const child = spawn(process.execPath, [cli, 'dev', '--local', '--config', config, '--persist-to', folder,
-  '--port', String(port), '--ip', '127.0.0.1', '--inspector-port', '0', '--var', `CATALOG_API_TOKEN:${token}`], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  '--port', String(port), '--ip', '127.0.0.1', '--inspector-port', '0', '--var', `CATALOG_API_TOKEN:${token}`,
+  '--var', `INGREDIENT_REVIEW_TOKEN:${token}-review`], { env, stdio: ['ignore', 'pipe', 'pipe'] });
 let output = ''; child.stdout.on('data', data => { output += data; }); child.stderr.on('data', data => { output += data; });
 const base = `http://127.0.0.1:${port}`, headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 try {
@@ -56,7 +72,14 @@ try {
       { productId: 'milk', willysCode: 'TEST_MILK_ST' }, { productId: 'orange', willysCode: 'TEST_ORANGE_KG', unit: 'g', packQuantity: 275 }
     ] }) })).json() as any;
   assert.equal(prices.prices.length, 2); assert.equal(prices.prices[1].price, 6.3);
-  console.log('Local Cloudflare runtime: schema, private API, freshness, pagination and pack prices passed. No remote resources were used.');
+  const tracked=await(await fetch(`${base}/ingredients/status`,{headers})).json() as any;
+  assert.equal(tracked.ingredientOccurrences,12);assert.equal(tracked.connectionsCurrent,true);
+  const linked=await(await fetch(`${base}/ingredients/lookup`,{method:'POST',headers,body:JSON.stringify({ingredients:['milk','water']})})).json() as any;
+  assert.equal(linked.ingredients[0].selectedCode,'TEST_MILK_ST');assert.equal(linked.ingredients[1].status,'non_purchased');
+  const review={name:'milk',action:'reject',code:'TEST_MILK_ST',reason:'Runtime test exclusion'};
+  assert.equal((await fetch(`${base}/ingredients/review`,{method:'POST',headers,body:JSON.stringify(review)})).status,401);
+  assert.equal((await fetch(`${base}/ingredients/review`,{method:'POST',headers:{...headers,Authorization:`Bearer ${token}-review`},body:JSON.stringify(review)})).status,200);
+  console.log('Local Cloudflare runtime: schema, private API, connections, separate review authorization, freshness, pagination and pack prices passed. No remote resources were used.');
 } catch (error) {
   console.error(output.slice(-4000)); throw error;
 } finally {
