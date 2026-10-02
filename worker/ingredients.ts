@@ -1,3 +1,5 @@
+import {DIETARY_POLICY_VERSION,ingredientPolicy,productPolicy} from '../src/dietary-policy.ts';
+
 type Env={DB:D1Database;GITHUB_REPOSITORY?:string;GITHUB_DISPATCH_TOKEN?:string};
 type Run={id:string;catalogue_snapshot_id:string;created_at:string;report_json:string};
 const json=(value:unknown,status=200)=>Response.json(value,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
@@ -14,6 +16,7 @@ export async function ingredientRoutes(request:Request,env:Env,snapshot:{id:stri
   let run=await env.DB.prepare(`SELECT * FROM ingredient_runs WHERE id=(SELECT value FROM catalog_state
     WHERE key='active_ingredient_run') AND status='complete'`).first<Run>();
   if(!run)return json({error:'ingredient_connections_not_ready'},503);
+  if(JSON.parse(run.report_json).dietaryPolicy?.version!==DIETARY_POLICY_VERSION)return json({error:'ingredient_policy_refresh_required'},503);
   if(route==='/ingredients/products'&&request.method==='GET'){
     const q=(url.searchParams.get('q')??'').trim();
     if(q.length<2||new TextEncoder().encode(q).length>40)return json({error:'search_must_be_2_to_40_bytes'},400);
@@ -21,10 +24,12 @@ export async function ingredientRoutes(request:Request,env:Env,snapshot:{id:stri
       json_extract(data_json,'$.raw.displayVolume') AS pack_label FROM catalog_entries WHERE snapshot_id=?
       AND instr(lower(replace(replace(replace(name,'Å','å'),'Ä','ä'),'Ö','ö')),?)>0 ORDER BY name LIMIT 30`)
       .bind(snapshot.id,q.toLowerCase()).all<{data_json:string;pack_label:string}>();
-    return json({products:records.results.map(r=>({...JSON.parse(r.data_json),packLabel:r.pack_label}))});
+    return json({products:records.results.map(r=>({...JSON.parse(r.data_json),packLabel:r.pack_label})).filter(p=>!productPolicy(p))});
   }
   if(route==='/ingredients/history'&&request.method==='GET'){
     const name=url.searchParams.get('name');if(!name||name.length>1000)return json({error:'ingredient_name_required'},400);
+    if(ingredientPolicy(name).blockedReason)return json({error:'ingredient_excluded_by_policy'},400);
+    if(!await env.DB.prepare('SELECT 1 AS ok FROM ingredient_links WHERE run_id=? AND ingredient_name=?').bind(run.id,name).first())return json({error:'unknown_ingredient'},404);
     const history=await env.DB.prepare('SELECT * FROM ingredient_change_history WHERE ingredient_name=? ORDER BY changed_at DESC LIMIT 100').bind(name).all();
     return json({name,changes:history.results});
   }
@@ -51,7 +56,7 @@ export async function ingredientRoutes(request:Request,env:Env,snapshot:{id:stri
     const cursor=url.searchParams.get('cursor');
     if(cursor){let decoded;try{decoded=decodeCursor(cursor);}catch{return json({error:'invalid_cursor'},400);}
       const selected=await env.DB.prepare("SELECT * FROM ingredient_runs WHERE id=? AND status='complete'").bind(decoded.run).first<Run>();
-      if(!selected)return json({error:'snapshot_expired'},409);run=selected;after=decoded.name;frequency=decoded.frequency??null;
+      if(!selected||JSON.parse(selected.report_json).dietaryPolicy?.version!==DIETARY_POLICY_VERSION)return json({error:'snapshot_expired'},409);run=selected;after=decoded.name;frequency=decoded.frequency??null;
       if(priority!==(frequency!==null))return json({error:'cursor_order_mismatch'},400);
     }
     const status=url.searchParams.get('status'),q=url.searchParams.get('q')??'';
@@ -76,6 +81,7 @@ export async function ingredientRoutes(request:Request,env:Env,snapshot:{id:stri
     const current=run.catalogue_snapshot_id===snapshot.id;
     return json({runId:run.id,catalogueSnapshotId:run.catalogue_snapshot_id,connectionsCurrent:current,
       ingredients:body.ingredients.map((name:string)=>{
+        const policy=ingredientPolicy(name);if(policy.blockedReason)return {name,status:'excluded_by_policy',reason:policy.blockedReason,selectedCode:null};
         const link=map.get(name);if(!link)return {name,status:'unknown_ingredient',selectedCode:null};
         return {...link,connectionsCurrent:current,priceFresh:current&&!!link.selectedProduct&&Date.parse(link.selectedProduct.expiresAt)>Date.now()};
       })});
@@ -85,11 +91,16 @@ export async function ingredientRoutes(request:Request,env:Env,snapshot:{id:stri
     if(!body||typeof body.name!=='string'||body.name.length>1000||!['approve','reject','clear'].includes(body.action)||
       !codeValid(body.code)&&body.action!=='clear'||typeof body.reason!=='string'||body.reason.trim().length<5||body.reason.length>1000||
       body.basis!==undefined&&!['kg','l','piece'].includes(body.basis))return json({error:'invalid_review'},400);
+    if(ingredientPolicy(body.name).blockedReason)return json({error:'ingredient_excluded_by_policy'},400);
     const found=await env.DB.prepare('SELECT 1 AS ok FROM ingredient_links WHERE run_id=? AND ingredient_name=?').bind(run.id,body.name).first();
     if(!found)return json({error:'unknown_ingredient'},404);
     if(body.action!=='clear'){
-      const product=await env.DB.prepare('SELECT 1 AS ok FROM catalog_entries WHERE snapshot_id=? AND code=?').bind(snapshot.id,body.code).first();
+      const product=await env.DB.prepare('SELECT data_json FROM catalog_entries WHERE snapshot_id=? AND code=?').bind(snapshot.id,body.code).first<{data_json:string}>();
       if(!product)return json({error:'unknown_product'},404);
+      if(body.action==='approve'){
+        const violation=productPolicy(JSON.parse(product.data_json),body.name);
+        if(violation)return json({error:'product_excluded_by_policy',reason:violation},400);
+      }
     }
     const old=await env.DB.prepare('SELECT decision_json FROM ingredient_reviews WHERE ingredient_name=?').bind(body.name).first<{decision_json:string}>();
     const before=old?JSON.parse(old.decision_json):{},approved=new Set<string>(before.approvedCodes??[]),rejected=new Set<string>(before.rejectedCodes??[]);

@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { FOOD_RULES } from './ingredient-vocabulary.ts';
 import type { FoodRule } from './ingredient-vocabulary.ts';
 import type { Entry } from './types.ts';
+import {ingredientPolicy,productPolicy,DIETARY_POLICY_VERSION} from './dietary-policy.ts';
+import type {PolicyClassification} from './dietary-policy.ts';
 
 export type Requirement = { name: string; occurrences: number };
 export type Pack = { label: string; quantity: number | null; unit: 'g' | 'ml' | 'piece' | null;
@@ -12,10 +14,11 @@ export type Candidate = { code: string; name: string; brand: string | null; avai
 export type Decision = { action: 'approve' | 'reject'; code: string; reason: string; reviewedAt: string;
   approvedCodes?: string[]; rejectedCodes?: string[]; basis?: FoodRule['basis'] };
 export type Link = Requirement & { ingredientId: string; foodId: string | null;
-  status: 'matched' | 'needs_review' | 'unavailable' | 'non_purchased';
+  status: 'matched' | 'needs_review' | 'unavailable' | 'non_purchased' | 'excluded';
   selectedCode: string | null; selectedProduct: Candidate | null; candidates: Candidate[];
-  reason: string; method: string; review?: Decision; matchConfidence: number | null };
-export const MATCHER_VERSION = 'willys-food-rules-2';
+  reason: string; method: string; review?: Decision; matchConfidence: number | null;
+  dietaryPolicy:PolicyClassification & {version:string} };
+export const MATCHER_VERSION = 'willys-food-rules-3';
 export const normalizeText = (s: string) => s.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
   .replace(/[’']/g, '').replace(/[^a-z0-9%]+/g, ' ').trim().replace(/\s+/g, ' ');
 const prep = /\b(?:finely|coarsely|freshly|chopped|diced|minced|sliced|grated|shredded|peeled|seeded|sifted|softened|melted|beaten|divided|packed|crushed|rinsed|drained|large|medium|small|optional)\b/g;
@@ -25,8 +28,10 @@ export function packInfo(entry: Entry): Pack {
   const text = label.toLowerCase().replace(/,/g,'.').replace(/\s/g,'').replace(/^ca:?/, '');
   let quantity: number | null = null, unit: Pack['unit'] = null, drainedGrams: number | null = null;
   const weight = /^(\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)(kg|g)$/.exec(text);
+  const cubes = /^(\d+)(?:p|st)\/\d+(?:\.\d+)?l$/.exec(text);
   const multi = /^(?:(\d+)x)?(\d+(?:\.\d+)?)(kg|g|ml|cl|dl|l|p|st|pack)$/.exec(text);
-  if (weight) { const scale=weight[3]==='kg'?1000:1; quantity=Number(weight[1])*scale; drainedGrams=Number(weight[2])*scale;unit='g'; }
+  if(cubes){quantity=Number(cubes[1]);unit='piece';}
+  else if (weight) { const scale=weight[3]==='kg'?1000:1; quantity=Number(weight[1])*scale; drainedGrams=Number(weight[2])*scale;unit='g'; }
   else if (multi) {
     const scale: Record<string,number>={kg:1000,g:1,l:1000,dl:100,cl:10,ml:1,p:1,st:1,pack:1};
     quantity=Number(multi[1]??1)*Number(multi[2])*scale[multi[3]];
@@ -53,8 +58,9 @@ export function candidate(entry: Entry, basis: FoodRule['basis'], now: number): 
       else if(entry.comparePriceOre!==null && compareUnit===(basis==='piece'?'st':basis))unitPrice=entry.comparePriceOre;
     }
   }
-  let exclusion: string|null=null;
-  if(!entry.available)exclusion='unavailable';
+  let exclusion: string|null=productPolicy(entry);
+  if(exclusion){} // Policy cannot be overridden by stock, price or review state.
+  else if(!entry.available)exclusion='unavailable';
   else if(entry.priceOre===null || entry.depositOre===null || unitPrice===null)exclusion='price_or_comparison_basis_unknown';
   else if(Date.parse(expiry(entry))<=now || Date.parse(entry.observedAt)>now+60000)exclusion='stale_price';
   // Never turn a conditional offer into an unconditional cheap item selection.
@@ -121,22 +127,25 @@ export function buildLinks(requirements: Requirement[], products: Entry[], revie
       title.test(normalizeText(p.name)) && (!exclude || !exclude.test(normalizeText(p.name)))));
   }
   return requirements.map(requirement=>{
-    const name=normalizeText(requirement.name), parsed=classify(requirement.name);
+    const name=normalizeText(requirement.name), parsed=classify(requirement.name), policy=ingredientPolicy(requirement.name);
     const base:Link={...requirement,ingredientId:ingredientId(requirement.name),foodId:parsed?.rule.id??null,
-      status:'needs_review',reason:'',selectedCode:null,selectedProduct:null,candidates:[],method:'food_rules',matchConfidence:null};
+      status:'needs_review',reason:'',selectedCode:null,selectedProduct:null,candidates:[],method:'food_rules',matchConfidence:null,
+      dietaryPolicy:{...policy,version:DIETARY_POLICY_VERSION}};
+    if(policy.blockedReason)return {...base,status:'excluded',method:'dietary_policy',reason:policy.blockedReason};
     if(/^(?:(?:boiling|hot|cold|warm|ice|tap|filtered|lukewarm|distilled) )?water$|^ice cubes?$/.test(name) && !reviews[requirement.name]){
       return {...base,status:'non_purchased',reason:'Tap water/ice assumed; no retail SKU or exact water cost assigned'};
     }
     const review=reviews[requirement.name];
     let pool=parsed?pools.get(parsed.rule.id)??[]:[];
     if(parsed)pool=pool.filter(parsed.constraints);
+    pool=pool.filter(p=>!productPolicy(p,requirement.name));
     const basis=review?.basis??parsed?.rule.basis??'kg';
     let candidates=pool.map(p=>candidate(p,basis,now));
     const rejected=new Set(review?.rejectedCodes??(review?.action==='reject'?[review.code]:[]));
     const approvedCodes=new Set(review?.approvedCodes??(review?.action==='approve'?[review.code]:[]));
     for(const code of approvedCodes){
       const approved=byCode.get(code);
-      if(approved && !candidates.some(c=>c.code===code))candidates.push(candidate(approved,basis,now));
+      if(approved && !productPolicy(approved,requirement.name) && !candidates.some(c=>c.code===code))candidates.push(candidate(approved,basis,now));
     }
     candidates=candidates.filter(c=>!rejected.has(c.code));
     candidates.sort((a,b)=>Number(b.eligible)-Number(a.eligible) ||

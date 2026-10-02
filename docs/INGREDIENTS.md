@@ -1,6 +1,18 @@
 # Live ingredient connections
 
-The recipe inventory contains **397,353 recipes**, **3,010,082 ingredient occurrences** and **6,438 distinct original ingredient names**. The complete recipe database stays local; only the names, frequencies and product connections are stored in D1. The inventory is `ingredient-data/requirements.json`.
+The active recipe inventory contains **233,846 recipes**, **1,596,207 ingredient occurrences** and **5,085 distinct original ingredient names**, after the owner's ingredient and meat-brand filter. The complete recipe database stays local; only the names, frequencies and product connections are stored in D1. The inventory is `ingredient-data/requirements.json`. Earlier complete-unit and connected databases remain preserved as source snapshots.
+
+## Ingredient and meat-brand policy
+
+`src/dietary-policy.ts` enforces `owner-halal-brands-strict-1`. Named pork and alcoholic ingredients are excluded. The owner also chose to exclude uncertain animal gelling agents/fats/stocks and extracts. Unspecified “vanilla” is excluded because its form is unknown; vanilla beans remain eligible. Explicit vegetarian substitutes, root beer, ginger ale and wine vinegar are not treated as pork/alcohol. Ordinary dairy and processed foods are not automatically excluded merely because their manufacturing ingredients are unavailable: this filter does not certify hidden ingredients or halal manufacturing.
+
+Chicken products require **Eldorado, Affco, Qibbla Halal, Agadeer, Aladin or Jack Links**. Other meat, including red meat and other poultry, requires one of those brands **except Eldorado**. Brand matching is exact after capitalization/accent/apostrophe normalization; missing brands are rejected. Named broth, bouillon, animal fat and meat mixtures are subject to the same restrictions. An available product must also have a verified compatible food identity/form and a fresh comparable price. Unknown cuts are not replaced with arbitrary cheap meat; sheep mince is not silently used as ground lamb.
+
+Whole recipes containing an excluded ingredient or meat without a verified permitted match were removed from the active subset. This removed **163,507 recipes** and **1,413,875 ingredient rows**. The filtered database also retains **634,165 reviews**. Names and frequencies are regenerated from the retained rows, so excluded ingredients are never passed to daily matching. Publication rejects a prohibited inventory before database writes. Saved reviews and privileged approvals cannot bypass product restrictions. Pre-policy connection versions cannot be served or resumed through old cursors.
+
+Daily refreshes may report `unavailable` if all permitted products for a retained meat ingredient disappear. They never fall back to a forbidden brand. Applications must suppress any recipe whose meat has no current eligible match; `recipe_dietary_status` does this for a refreshed local snapshot. To physically rebuild a local subset after catalogue changes, regenerate the policy audit and run `food_unit_reconstruction.dietary_filter`; local recipe files do not update while the computer is off.
+
+Rebuilding is described in `docs/DIETARY_POLICY.md`.
 
 Every name receives an explicit outcome. `matched` means an available product with a fresh comparable price was selected by a food rule or a recorded human decision. `needs_review` means identity, preparation or substitution is uncertain. `unavailable` means the verified food has no eligible product in this store. `non_purchased` covers tap water and ice without inventing a retail product or amount. Tracking 100% of names does **not** mean 100% are connected, costed, or independently verified as correct.
 
@@ -44,7 +56,7 @@ const result = await response.json();
 // Only use selectedCode when status is matched. Require priceFresh before pricing.
 ```
 
-Lookup uses the original literal names in the recipe database, including capitalization. It reports `unknown_ingredient` for names outside this inventory. New recipe datasets require regenerating the inventory, checking the source database hash, and refreshing connections.
+Lookup uses the original literal names in the recipe database, including capitalization. It reports `excluded_by_policy` for prohibited names and `unknown_ingredient` for other names outside this inventory. New recipe datasets require regenerating and filtering the inventory, checking the source database hash, and refreshing connections. Product search hides policy-excluded products; the separate catalogue API remains complete.
 
 Writes require a **separate** `INGREDIENT_REVIEW_TOKEN`. Deployment creates and saves it privately in `data/ingredient-review.env`, and uploads it as a Worker secret. Read access cannot change mappings. A review payload looks like `{name:'eggs',action:'approve',code:'100657772_ST',basis:'piece',reason:'Verified compatible whole chicken eggs'}`. `action` can be `approve`, `reject` or `clear`. Saving a review does not mutate the published version; a successful refresh applies it. `refreshNow:true` optionally queues that refresh. Approvals record compatibility rather than permanently fixing a chosen SKU.
 
@@ -61,16 +73,17 @@ The recipe project supplies `python -m food_unit_reconstruction.willys_connectio
 ```bash
 cd /home/adde/Music/food_unit_reconstruction
 .venv/bin/python -m food_unit_reconstruction.willys_connections \
-  --database data/outputs/recipes_with_willys_20261002/recipes_with_willys.sqlite
+  --database data/outputs/recipes_with_willys_policy_20261002/recipes_with_willys_policy.sqlite
 ```
 
-The first creation also uses `--source data/outputs/recipes_with_units_20260930/recipes_with_units.sqlite`. It creates a separate complete copy and preserves the source. Later refreshes omit `--source` and update only the small shared connection table. Local copies are snapshots; use the cloud API for automatic daily updates in your application or rerun this importer when updating the local copy.
+The dietary filter creates the initial subset. Later connection imports update only the small shared connection table. The original unfiltered database has a different inventory and cannot receive filtered connections. Local copies are snapshots; use the cloud API for automatic daily updates in your application or rerun this importer when updating the local copy.
 
 `ingredient_product_connections` stores one outcome per literal name. `ingredient_willys` joins the connections to all original ingredient rows and exposes `willys_item_id`, product name, price basis and expiry. `recipe_willys_status` counts unresolved ingredients per recipe; `all_shopping_ingredients_connected=1` includes tap water/ice as non-purchased. Original recipes, ingredients, reviews and reconstruction evidence remain available.
 
 ```sql
 SELECT * FROM ingredient_willys WHERE RecipeId='your-recipe-id';
 SELECT RecipeId FROM recipe_willys_status WHERE all_shopping_ingredients_connected=1;
+SELECT RecipeId FROM recipe_dietary_status WHERE eligible_under_ingredient_policy=1;
 ```
 
 ## Cost and correctness boundaries

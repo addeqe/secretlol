@@ -474,4 +474,27 @@ revise('condensed-milk-unspecified',{aliases:['condensed milk']});
 revise('cornmeal',{title:'^polenta',aliases:['cornmeal','corn meal']});
 revise('cornmeal-yellow',{title:'^polenta'});
 food('maize-flour','maize flour','^majsmjol',shelf);
+// Verified cuts in the permitted-brand catalogue. Do not replace whole birds,
+// unknown cuts, cooked meat or ground lamb with a different form/species.
+revise('chicken-breast',{title:'^(?:kyckling ?(?:brost)?file|kycklingbrost file|brostfile kyckling)',
+  aliases:[...rules.find(r=>r.id==='chicken-breast')!.aliases,'boneless chicken breast','skinless chicken breasts',
+    'skinless chicken breast','skinless chicken breast halves','boneless skinless chicken breast half',
+    'chicken breast fillets','chicken breast fillet']});
+revise('chicken-thigh',{aliases:['chicken thighs','chicken thigh'],title:'kyckling ?lar',ambiguous:true});
+food('chicken-thigh-fillet','boneless chicken thighs|boneless skinless chicken thighs|boneless skinless chicken thigh',
+  '^kyckling ?larfile',meat+'|'+frozen,'kg',{exclude:'grill|tillagad|krydd|marinerad'});
+food('chicken-drumstick','chicken drumsticks|chicken drumstick','^kycklingben',meat+'|'+frozen,'kg',{exclude:'grill|tillagad|krydd|marinerad'});
+food('chicken-leg','chicken legs|chicken leg|chicken leg quarters|chicken leg quarter','^kyckling ?klubba',meat+'|'+frozen,'kg',{exclude:'grill|tillagad|krydd|marinerad'});
+food('chicken-tenderloin','chicken tenderloins|chicken tenderloin','^kyckling ?innerfile',meat+'|'+frozen);
+food('chicken-liver','chicken liver|chicken livers','^kycklinglever',meat+'|'+frozen);
+food('chicken-gizzard','chicken gizzard|chicken gizzards','^kycklingmage',meat+'|'+frozen);
+food('chicken-heart','chicken heart|chicken hearts','^kycklinghjarta',meat+'|'+frozen);
+food('chicken-nuggets','chicken nuggets|frozen chicken nuggets','^kyckling nuggets',meat+'|'+frozen);
+revise('chicken-wing',{aliases:['chicken wings','chicken wing']});
+revise('beef-mince',{aliases:[...rules.find(r=>r.id==='beef-mince')!.aliases,'minced beef','hamburger meat']});
+revise('beef-tenderloin',{aliases:[...rules.find(r=>r.id==='beef-tenderloin')!.aliases,'filet of beef','beef tenderloin steaks'],categories:[meat,frozen]});
+food('lamb-shank','lamb shanks|lamb shank','^lammlagg',meat+'|'+frozen);
+food('lamb-stew','lamb stew meat|lamb stewing meat','^lammgrytbitar',meat+'|'+frozen);
+food('lamb-leg-bone','bone-in leg of lamb|leg of lamb with bone','^lammstek med ben',meat+'|'+frozen);
+revise('chicken-bouillon-cube',{title:'^kyckling ?buljo(?:ng|n).*tarning',basis:'piece'});
 export const FOOD_RULES: readonly FoodRule[] = rules;

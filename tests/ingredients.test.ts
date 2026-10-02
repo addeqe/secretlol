@@ -10,6 +10,7 @@ import {handle} from '../worker/index.ts';
 import type {Entry,Scan,Statement} from '../src/types.ts';
 import {FOOD_RULES} from '../src/ingredient-vocabulary.ts';
 import {normalizeText} from '../src/ingredient-matching.ts';
+import {ingredientPolicy,productPolicy,DIETARY_POLICY_VERSION} from '../src/dietary-policy.ts';
 
 const date=()=>new Date().toISOString();
 function product(code:string,name:string,price:number,pack:string,category='Mejeri, ost & ägg'):Entry{
@@ -51,6 +52,7 @@ test('required salt, virgin oil, lean meat and preparation modifiers survive mat
   const items=[product('SALTED','Smör Normalsaltat 82%',10,'500g'),product('UNSALTED','Smör Osaltat 82%',20,'500g'),
     product('OIL','Olivolja',10,'1l','Skafferi'),product('VIRGIN','Olivolja Extra Virgin',20,'1l','Skafferi'),
     product('FAT','Nötfärs 20%',10,'500g','Kött, chark & fågel'),product('LEAN','Nötfärs 5%',20,'500g','Kött, chark & fågel')];
+  for(const p of items.filter(p=>p.code==='FAT'||p.code==='LEAN'))p.brand='Qibbla Halal';
   const result=buildLinks(['unsalted butter','extra virgin olive oil','lean ground beef','garlic butter'].map(name=>({name,occurrences:1})),items);
   assert.deepEqual(result.map(l=>l.selectedCode),['UNSALTED','VIRGIN','LEAN',null]);
   assert.equal(result[3].status,'needs_review');
@@ -158,5 +160,64 @@ test('priority review pagination sorts frequency and neither skips nor repeats t
       names.push(page.ingredients[0].name);cursor=page.nextCursor;
     }
     assert.deepEqual(names,['z','a','b']);assert.equal(cursor,null);
+  }finally{d.close();}
+});
+
+test('strict ingredient exclusions distinguish plant foods and nonalcoholic names',()=>{
+  for(const name of ['pork','bacon','ham hocks','pancetta','lardons','red wine','dry sherry','Irish cream','hard apple cider',
+    'vanilla extract','vanilla','almond extract','unflavored gelatin','marshmallows','shortening','broth','blood sausage']){
+    assert.ok(ingredientPolicy(name).blockedReason,name);
+  }
+  for(const name of ['root beer','ginger ale','red wine vinegar','sherry vinegar','non-alcoholic beer','champagne grapes',
+    'vegan bacon','vegetarian gelatin','vegetarian chicken broth','vegetable shortening','vanilla bean','vanilla ice cream',
+    'goat cheese','lobster meat','kidney beans','hamburger buns','blood orange','Jello Instant Vanilla Pudding Mix']){
+    assert.deepEqual(ingredientPolicy(name),{blockedReason:null,meat:null},name);
+  }
+  const link=buildLinks([{name:'bacon',occurrences:1}],[eggs('E',20,6)],{bacon:{action:'approve',code:'E',reason:'Attempted bypass',reviewedAt:date()}})[0];
+  assert.equal(link.status,'excluded');assert.equal(link.selectedCode,null);
+});
+test('meat brands are exact and policy also applies to manually approved alternatives',()=>{
+  const a=product('CHEAP','Kyckling Filé Fryst',1,'1kg','Fryst');a.brand='Unapproved';
+  const b={...a,code:'ALLOWED',priceOre:5000,brand:'Eldorado'};
+  const beef=product('BEEF','Nötfärs Fryst',10,'1kg','Fryst');beef.brand='Eldorado';
+  const allowedBeef={...beef,code:'HALAL',brand:'Qibbla Halal',priceOre:3000};
+  const review={action:'approve' as const,code:a.code,reason:'Attempted bypass',reviewedAt:date()};
+  const result=buildLinks([{name:'chicken breast',occurrences:1},{name:'ground beef',occurrences:1}],
+    [a,b,beef,allowedBeef],{'chicken breast':review,'ground beef':{...review,code:'BEEF'}});
+  assert.deepEqual(result.map(l=>l.selectedCode),['ALLOWED','HALAL']);
+  assert.equal(productPolicy({...b,brand:'Eldorado Other'},'chicken breast'),'meat_brand_not_permitted');
+  assert.equal(productPolicy({...beef,brand:"Jack Link’s"},'ground beef'),null);
+  assert.ok(productPolicy({...beef,brand:null},'ground beef'));
+  assert.ok(productPolicy(b,'ground beef'));
+});
+test('excluded daily inventories fail before any database call',async()=>{
+  let calls=0;const d={query:async()=>{calls++;return [];},batch:async()=>{calls++;return [];}};
+  await assert.rejects(refreshIngredientLinks(d,{...inv,requirements:[{name:'pork',occurrences:112}]}),/Excluded ingredient/);
+  assert.equal(calls,0);
+});
+test('the Worker blocks prohibited reviews, searches and pre-policy connection snapshots',async()=>{
+  const d=db();try{
+    const chicken=product('CHICKEN','Kyckling Filé',30,'1kg','Kött, chark & fågel');chicken.brand='Unapproved';
+    const bacon=product('BACON','Bacon',10,'100g','Kött, chark & fågel');bacon.brand='Eldorado';
+    await publish(d,scan([eggs('A',30,20),chicken,bacon]));const first=await refreshIngredientLinks(d,inv);
+    const env={DB:workerDb(d),CATALOG_API_TOKEN:token,INGREDIENT_REVIEW_TOKEN:reviewToken};
+    for(const code of ['CHICKEN','BACON'])assert.equal((await handle(request('/ingredients/review',
+      {name:'eggs',action:'approve',code,reason:'Attempted policy bypass'},reviewToken),env)).status,400);
+    const found=await(await handle(request('/ingredients/products?q=Bacon'),env)).json() as any;assert.equal(found.products.length,0);
+    const blocked=await(await handle(request('/ingredients/lookup',{ingredients:['pork','vanilla extract']}),env)).json() as any;
+    assert.ok(blocked.ingredients.every((r:any)=>r.status==='excluded_by_policy'&&r.selectedCode===null));
+    await d.query("UPDATE ingredient_runs SET report_json=json_remove(report_json,'$.dietaryPolicy') WHERE id=?",[first.runId]);
+    assert.equal((await handle(request('/ingredients/status'),env)).status,503);
+    assert.ok(DIETARY_POLICY_VERSION);
+  }finally{d.close();}
+});
+test('publication removes connections retained in a pre-policy snapshot',async()=>{
+  const d=db();try{
+    await publish(d,scan([eggs('A',30,20)]));const first=await refreshIngredientLinks(d,inv);
+    await d.query("UPDATE ingredient_runs SET report_json=json_remove(report_json,'$.dietaryPolicy') WHERE id=?",[first.runId]);
+    await d.query('INSERT INTO ingredient_links VALUES(?,?,?,?,?,?)',[first.runId,'bacon',1,'matched','A','{}']);
+    const next=await refreshIngredientLinks(d,inv);
+    assert.equal((await rows(d,'SELECT COUNT(*) AS n FROM ingredient_links WHERE run_id=?',[first.runId]))[0].n,0);
+    assert.equal((await rows(d,'SELECT COUNT(*) AS n FROM ingredient_links WHERE run_id=?',[next.runId]))[0].n,3);
   }finally{d.close();}
 });

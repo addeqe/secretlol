@@ -5,14 +5,17 @@ import {buildLinks,summarizeLinks,MATCHER_VERSION} from './ingredient-matching.t
 import type {Requirement,Decision} from './ingredient-matching.ts';
 import type {Database,Entry} from './types.ts';
 import {integer} from './config.ts';
+import {DIETARY_POLICY,DIETARY_POLICY_VERSION,ingredientPolicy} from './dietary-policy.ts';
 
 export function loadRequirements(){
   const bytes=readFileSync(new URL('../ingredient-data/requirements.json',import.meta.url));
-  const data=JSON.parse(bytes.toString()) as {requirements:Requirement[];ingredientOccurrences:number;recipes:number};
+  const data=JSON.parse(bytes.toString()) as {requirements:Requirement[];ingredientOccurrences:number;recipes:number;dietaryPolicy?:{version:string}};
   if(data.requirements.reduce((n,r)=>n+r.occurrences,0)!==data.ingredientOccurrences)throw new Error('Inventory count mismatch');
+  if(data.dietaryPolicy?.version!==DIETARY_POLICY_VERSION)throw new Error('Daily inventory is not filtered for the current ingredient policy');
   return {...data,hash:createHash('sha256').update(bytes).digest('hex')};
 }
 export async function refreshIngredientLinks(database:Database, inventory=loadRequirements()){
+  if(inventory.requirements.some(r=>ingredientPolicy(r.name).blockedReason))throw new Error('Excluded ingredient in daily inventory; regenerate the filtered recipe inventory before refreshing');
   if(database instanceof D1DatabaseClient&&database.rowsWritten+inventory.requirements.length*3+1100>integer('MAX_D1_ROWS_WRITTEN',80000)){
     throw new Error('Combined catalogue/ingredient refresh would exceed the free write budget; previous connections retained');
   }
@@ -38,7 +41,7 @@ export async function refreshIngredientLinks(database:Database, inventory=loadRe
     const report={...summarizeLinks(links),recipes:inventory.recipes,storeId:snapshot.store_id,
       catalogueSnapshotId:snapshot.id,runId:id,completedAt:new Date().toISOString(),inventoryHash:inventory.hash,
       matcherVersion:MATCHER_VERSION,selectionPolicy:'lowest comparable listed price among verified compatible available products; conditional offers are not assumed',
-      conversionComplete:false};
+      dietaryPolicy:DIETARY_POLICY,conversionComplete:false};
     const previousId=String((await rows(database,"SELECT value FROM catalog_state WHERE key='active_ingredient_run'"))[0]?.value??'');
     // Keep the currently active run while staging a replacement; reclaim our own
     // abandoned/previous rows only. Catalogue tables are never cleaned here.
@@ -74,6 +77,13 @@ export async function refreshIngredientLinks(database:Database, inventory=loadRe
       {sql:"UPDATE ingredient_runs SET status='complete' WHERE id=?",params:[id]},
       {sql:"INSERT INTO catalog_state VALUES('active_ingredient_run',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params:[id]}
     ]);
+    // A pre-policy snapshot must not retain prohibited connections. Modern
+    // snapshots with the same policy can still support pinned pagination.
+    const previous=(await rows(database,'SELECT report_json FROM ingredient_runs WHERE id=?',[previousId]))[0];
+    if(previous && JSON.parse(String(previous.report_json)).dietaryPolicy?.version!==DIETARY_POLICY_VERSION){
+      await database.query('DELETE FROM ingredient_links WHERE run_id=?',[previousId]);
+      await database.query('DELETE FROM ingredient_runs WHERE id=?',[previousId]);
+    }
     await database.query(`DELETE FROM ingredient_change_history WHERE (ingredient_name,changed_at) IN
       (SELECT ingredient_name,changed_at FROM ingredient_change_history WHERE changed_at<? LIMIT 1000)`,
       [new Date(Date.now()-90*86400000).toISOString()]);
