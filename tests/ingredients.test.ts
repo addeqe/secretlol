@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {LocalDatabase,D1DatabaseClient,rows} from '../src/database.ts';
 import {normalize} from '../src/products.ts';
-import {buildLinks,packInfo} from '../src/ingredient-matching.ts';
+import {buildLinks,packInfo,reviewAttributeExclusion} from '../src/ingredient-matching.ts';
+import {catalogueIdentityHash} from '../src/ingredient-assessments.ts';
+import type {Assessment} from '../src/ingredient-assessments.ts';
 import {refreshIngredientLinks} from '../src/ingredient-publish.ts';
 import {publish} from '../src/publish.ts';
 import {handle} from '../worker/index.ts';
@@ -165,7 +167,9 @@ test('priority review pagination sorts frequency and neither skips nor repeats t
 
 test('strict ingredient exclusions distinguish plant foods and nonalcoholic names',()=>{
   for(const name of ['pork','bacon','ham hocks','pancetta','lardons','red wine','dry sherry','Irish cream','hard apple cider',
-    'vanilla extract','vanilla','almond extract','unflavored gelatin','marshmallows','shortening','broth','blood sausage']){
+    'vanilla extract','vanilla','almond extract','unflavored gelatin','marshmallows','shortening','broth','blood sausage',
+    'Ricard','anisette','anisette flavoring','Herbsaint','cachaca','Pisco','cottage roll','white Creme de Cacao','creme de cassis',
+    'green creme de menthe','framboise eau-de-vie','Drunken Cherries Aka Cherry Bomb','Thai Burgers','jamon serrano']){
     assert.ok(ingredientPolicy(name).blockedReason,name);
   }
   for(const name of ['root beer','ginger ale','red wine vinegar','sherry vinegar','non-alcoholic beer','champagne grapes',
@@ -175,6 +179,10 @@ test('strict ingredient exclusions distinguish plant foods and nonalcoholic name
   }
   const link=buildLinks([{name:'bacon',occurrences:1}],[eggs('E',20,6)],{bacon:{action:'approve',code:'E',reason:'Attempted bypass',reviewedAt:date()}})[0];
   assert.equal(link.status,'excluded');assert.equal(link.selectedCode,null);
+  const reptile=buildLinks([{name:'crocodile',occurrences:1}],[eggs('E',20,6)],{crocodile:{action:'approve',code:'E',reason:'Attempted bypass',reviewedAt:date()}})[0];
+  assert.equal(reptile.dietaryPolicy.meat,'other_meat');assert.notEqual(reptile.status,'matched');
+  assert.equal(ingredientPolicy('bresaola').meat,'red_meat');
+  assert.equal(ingredientPolicy('serrano chilies').blockedReason,null);
 });
 test('meat brands are exact and policy also applies to manually approved alternatives',()=>{
   const a=product('CHEAP','Kyckling Filé Fryst',1,'1kg','Fryst');a.brand='Unapproved';
@@ -220,4 +228,60 @@ test('publication removes connections retained in a pre-policy snapshot',async()
     assert.equal((await rows(d,'SELECT COUNT(*) AS n FROM ingredient_links WHERE run_id=?',[first.runId]))[0].n,0);
     assert.equal((await rows(d,'SELECT COUNT(*) AS n FROM ingredient_links WHERE run_id=?',[next.runId]))[0].n,3);
   }finally{d.close();}
+});
+
+function assessed(name:string,products:Entry[],outcome:Assessment['outcome']='approve'):Assessment {
+  return {name,outcome,approvedCodes:outcome==='approve'?products.map(p=>p.code):[],basis:outcome==='approve'?'piece':null,
+    reason:'Reviewed food identity and preparation against the catalogue',evidence:products.length?products.map(p=>p.name):['searched exact food title'],
+    reviewedAt:date(),reviewerModel:'gpt-6-luna',catalogueSnapshotId:'test',catalogueIdentityHash:catalogueIdentityHash(products),
+    products:outcome==='approve'?products.map(p=>({code:p.code,name:p.name,brand:p.brand})):[]};
+}
+test('agent reviewed alternatives switch prices and respect human rejection without paid reruns',()=>{
+  const name='a reviewed unusual egg name',a=eggs('A',30,20),b=eggs('B',40,20),review=assessed(name,[a,b]);
+  const requirement={name,occurrences:1};
+  assert.equal(buildLinks([requirement],[a,b],{},Date.now(),{[name]:review})[0].selectedCode,'A');
+  b.priceOre=2000;
+  const cheaper=buildLinks([requirement],[a,b],{},Date.now(),{[name]:review})[0];
+  assert.equal(cheaper.selectedCode,'B');assert.equal(cheaper.method,'agent_reviewed');
+  const rejected={action:'reject' as const,code:'B',reason:'Confirmed incompatible option',reviewedAt:date(),rejectedCodes:['B']};
+  assert.equal(buildLinks([requirement],[a,b],{[name]:rejected},Date.now(),{[name]:review})[0].selectedCode,'A');
+  const replacement={...b,code:'NEW_ID',priceOre:1000};
+  assert.equal(buildLinks([requirement],[a,replacement],{},Date.now(),{[name]:review})[0].selectedCode,'NEW_ID');
+});
+test('a reused product ID with a different food or missing specified attributes cannot use an agent approval',()=>{
+  const name='a reviewed unusual egg name',a=eggs('A',30,20),review=assessed(name,[a]);
+  a.name='Choklad';
+  const changed=buildLinks([{name,occurrences:1}],[a],{},Date.now(),{[name]:review})[0];
+  assert.equal(changed.selectedCode,null);assert.equal(changed.status,'needs_review');
+  const highFat=product('Y','Yoghurt Naturell 3%',20,'1kg');
+  assert.equal(reviewAttributeExclusion('nonfat yogurt',highFat),'fat_free_not_verified');
+  assert.equal(reviewAttributeExclusion('organic yogurt',highFat),'organic_not_verified');
+  assert.equal(reviewAttributeExclusion('2% yogurt',highFat),'percentage_not_verified');
+  assert.equal(reviewAttributeExclusion('unsalted butter',product('S','Smör Normalsaltat',20,'500g')),'unsalted_not_verified');
+  assert.equal(reviewAttributeExclusion('light brown sugar',product('F','Farinsocker',20,'500g','Skafferi')),null);
+  assert.equal(reviewAttributeExclusion('red plums',product('P','Plommon Gula Klass 1',20,'500g','Frukt & Grönt')),'plum_colour_not_verified');
+  assert.equal(reviewAttributeExclusion('artichoke bottoms',product('H','Kronärtskocka Hjärtan Inlagda',20,'500g','Skafferi')),'artichoke_bottom_not_verified');
+  assert.equal(reviewAttributeExclusion('Grey Poupon mustard',product('M','Dijonsenap Original',20,'500g','Skafferi')),'requested_brand_not_verified');
+  assert.equal(reviewAttributeExclusion('canned black beans',product('D','Svarta Bönor',20,'800g','Skafferi')),'preserved_beans_not_verified');
+  assert.equal(reviewAttributeExclusion('canned black beans',product('C','Svarta Bönor Naturella',20,'380/230g','Skafferi')),null);
+  assert.equal(reviewAttributeExclusion('dried black beans',product('C','Svarta Bönor Naturella',20,'380/230g','Skafferi')),'dry_beans_incompatible');
+  assert.equal(reviewAttributeExclusion('vegan margarine',product('V','Margarin Mat & Bak',20,'500g')),'plant_based_margarine_not_verified');
+  assert.equal(reviewAttributeExclusion('chai tea teabags',product('T','Chai Masala Te',20,'150g','Dryck')),'tea_bag_form_not_verified');
+  assert.equal(reviewAttributeExclusion('dried chives',product('CH','Gräslök Finhackad Fryst',20,'50g','Fryst')),'dry_form_incompatible');
+  assert.equal(reviewAttributeExclusion('dried ancho chiles',product('AN','Chili Ancho Torkad',20,'30g','Frukt & Grönt')),null);
+  assert.equal(reviewAttributeExclusion('white bread machine flour',product('BR','Rostbröd Klassiskt',20,'450g','Bröd & Kakor')),'flour_identity_not_verified');
+  assert.equal(reviewAttributeExclusion('medium hot salsa',product('SA','Salsa Stark',20,'300g','Skafferi')),'medium_salsa_not_verified');
+});
+test('verified catalogue absences are explicit and reopen when the catalogue identity changes',()=>{
+  const name='unusual food requiring a speciality store',a=eggs('A',30,20),assessment=assessed(name,[a],'unavailable');
+  const requirement={name,occurrences:1};
+  assert.equal(buildLinks([requirement],[a],{},Date.now(),{[name]:assessment})[0].status,'unavailable');
+  a.priceOre=5000;
+  assert.equal(buildLinks([requirement],[a],{},Date.now(),{[name]:assessment})[0].status,'unavailable');
+  const reopened=buildLinks([requirement],[a,eggs('NEW',30,20)],{},Date.now(),{[name]:assessment})[0];
+  assert.equal(reopened.status,'needs_review');assert.match(reopened.reason,/Catalogue products/);
+  const unclear=assessed('eggs',[a],'clarify');
+  assert.equal(buildLinks([{name:'eggs',occurrences:1}],[a],{},Date.now(),{eggs:unclear})[0].status,'needs_review');
+  assert.equal(buildLinks([{name:'eggs',occurrences:1}],[a],{},Date.now(),{eggs:unclear})[0].candidates.length,0);
+  assert.equal(buildLinks([{name:'eggs',occurrences:1}],[a],{eggs:{action:'approve',code:'A',basis:'piece',reason:'Verified after clarification',reviewedAt:date()}},Date.now(),{eggs:unclear})[0].status,'matched');
 });

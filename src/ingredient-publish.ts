@@ -6,6 +6,7 @@ import type {Requirement,Decision} from './ingredient-matching.ts';
 import type {Database,Entry} from './types.ts';
 import {integer} from './config.ts';
 import {DIETARY_POLICY,DIETARY_POLICY_VERSION,ingredientPolicy} from './dietary-policy.ts';
+import {loadAssessments} from './ingredient-assessments.ts';
 
 export function loadRequirements(){
   const bytes=readFileSync(new URL('../ingredient-data/requirements.json',import.meta.url));
@@ -37,11 +38,13 @@ export async function refreshIngredientLinks(database:Database, inventory=loadRe
     }
     const reviewRows=await rows(database,'SELECT ingredient_name,decision_json FROM ingredient_reviews');
     const reviews=Object.fromEntries(reviewRows.map(r=>[String(r.ingredient_name),JSON.parse(String(r.decision_json)) as Decision]));
-    const links=buildLinks(inventory.requirements,products,reviews);
+    const assessed=loadAssessments();
+    const links=buildLinks(inventory.requirements,products,reviews,Date.now(),assessed.records);
     const report={...summarizeLinks(links),recipes:inventory.recipes,storeId:snapshot.store_id,
       catalogueSnapshotId:snapshot.id,runId:id,completedAt:new Date().toISOString(),inventoryHash:inventory.hash,
       matcherVersion:MATCHER_VERSION,selectionPolicy:'lowest comparable listed price among verified compatible available products; conditional offers are not assumed',
-      dietaryPolicy:DIETARY_POLICY,conversionComplete:false};
+      dietaryPolicy:DIETARY_POLICY,ingredientReview:{...assessed.report,
+        activeReviewedNames:inventory.requirements.filter(r=>assessed.records[r.name]).length},conversionComplete:false};
     const previousId=String((await rows(database,"SELECT value FROM catalog_state WHERE key='active_ingredient_run'"))[0]?.value??'');
     // Keep the currently active run while staging a replacement; reclaim our own
     // abandoned/previous rows only. Catalogue tables are never cleaned here.

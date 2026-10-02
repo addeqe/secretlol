@@ -4,6 +4,8 @@ import type { FoodRule } from './ingredient-vocabulary.ts';
 import type { Entry } from './types.ts';
 import {ingredientPolicy,productPolicy,DIETARY_POLICY_VERSION} from './dietary-policy.ts';
 import type {PolicyClassification} from './dietary-policy.ts';
+import {catalogueIdentityHash,productIdentity} from './ingredient-assessments.ts';
+import type {Assessment} from './ingredient-assessments.ts';
 
 export type Requirement = { name: string; occurrences: number };
 export type Pack = { label: string; quantity: number | null; unit: 'g' | 'ml' | 'piece' | null;
@@ -17,12 +19,58 @@ export type Link = Requirement & { ingredientId: string; foodId: string | null;
   status: 'matched' | 'needs_review' | 'unavailable' | 'non_purchased' | 'excluded';
   selectedCode: string | null; selectedProduct: Candidate | null; candidates: Candidate[];
   reason: string; method: string; review?: Decision; matchConfidence: number | null;
-  dietaryPolicy:PolicyClassification & {version:string} };
-export const MATCHER_VERSION = 'willys-food-rules-3';
+  dietaryPolicy:PolicyClassification & {version:string};assessment?:Assessment };
+export const MATCHER_VERSION = 'willys-food-rules-4-reviewed';
 export const normalizeText = (s: string) => s.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
   .replace(/[’']/g, '').replace(/[^a-z0-9%]+/g, ' ').trim().replace(/\s+/g, ' ');
 const prep = /\b(?:finely|coarsely|freshly|chopped|diced|minced|sliced|grated|shredded|peeled|seeded|sifted|softened|melted|beaten|divided|packed|crushed|rinsed|drained|large|medium|small|optional)\b/g;
 export function ingredientId(name: string) { return 'ing_' + createHash('sha256').update(name).digest('hex').slice(0,24); }
+export function reviewAttributeExclusion(name:string,entry:Entry):string|null {
+  const request=normalizeText(name),title=normalizeText(entry.name),cats=entry.categories.map(normalizeText);
+  const checks:Array<[boolean,boolean,string]>=[
+    [/\borganic\b/.test(request),/\beko\b|ekologisk/.test(title),'organic_not_verified'],
+    [/\bgluten free\b|\bglutenfree\b/.test(request),/glutenfri/.test(title+' '+cats.join(' ')),'gluten_free_not_verified'],
+    [/\blactose free\b|\blactosefree\b/.test(request),/laktosfri/.test(title),'lactose_free_not_verified'],
+    [/\bunsalted\b/.test(request),/osalt|utan salt/.test(title),'unsalted_not_verified'],
+    [/\bunsweetened\b/.test(request),/osotad|utan (?:tillsatt )?socker/.test(title),'unsweetened_not_verified'],
+    [/\b(?:sugar free|sugarfree)\b/.test(request),/sockerfri|sugar free|0%.*socker/.test(title),'sugar_free_not_verified'],
+    [/\b(?:fat free|nonfat|non fat)\b/.test(request),/fettfri|fat free|(?:^| )0%(?: |$)/.test(title),'fat_free_not_verified'],
+    [/\b(?:low fat|reduced fat)\b|\blight (?:mayonnaise|mayo|cream cheese|cream|sour cream|yogurt|yoghurt|butter|margarine|cheddar|ricotta|milk|coconut milk)\b/.test(request),
+      /\blatt\w*\b|\blight\b|lag.*fett|fettreducer/.test(title),'reduced_fat_not_verified'],
+    [/\b(?:low sodium|low salt|reduced sodium|reduced salt)\b/.test(request),/saltreducer|lag.*salt|mindre salt|low sodium/.test(title),'reduced_salt_not_verified'],
+    [/\b(?:no salt added|no added salt|salt free)\b/.test(request),/utan (?:tillsatt )?salt|saltfri/.test(title),'no_added_salt_not_verified'],
+    [/\bextra virgin\b/.test(request),/extra virgin|extra vergine|extra jungfru/.test(title),'extra_virgin_not_verified'],
+    [/\bfrozen\b/.test(request),/fryst|frysta/.test(title)||cats.some(c=>c.startsWith('fryst')),'frozen_not_verified'],
+    [/\b(?:dry|dried)\b/.test(request),!(/fryst|frysta/.test(title)||cats.some(c=>c.startsWith('fryst')))&&
+      (/torkad|dried/.test(title)||!(/farsk/.test(title)||cats.some(c=>c.startsWith('frukt')))),'dry_form_incompatible'],
+    [/\bfresh\b/.test(request),!(/fryst|frysta|torkad/.test(title)||cats.some(c=>c.startsWith('fryst'))),'fresh_incompatible'],
+    [/\bcooked\b/.test(request),/kokt|fardigkokt|tillagad|grillad|stekt/.test(title),'cooked_form_not_verified'],
+    [/\bnon hydrogenated\b/.test(request),/icke hardad|non hydrogenated|ohardad/.test(title),'non_hydrogenated_not_verified'],
+    [/\bwater packed\b|\bin water\b/.test(request),/i vatten|i lake|water packed/.test(title),'water_packed_not_verified'],
+    [/\bcapers? packed in salt\b/.test(request),/i salt|saltpack|packed in salt/.test(title),'salt_packed_not_verified'],
+    [/\b(?:artichoke bottoms?|artichoke bottom)\b/.test(request),/kronartskocksbottn|artichoke bottom/.test(title),'artichoke_bottom_not_verified'],
+    [/\b(?:soy|soya) margarine\b/.test(request),/soja|soy/.test(title),'soy_margarine_not_verified'],
+    [/\bstick margarine\b/.test(request),/stick|stav/.test(title),'stick_form_not_verified'],
+    [/\bfrozen cut okra\b/.test(request),/hackad|bitar|skivad|cut/.test(title),'cut_okra_not_verified'],
+    [/\b(?:vegan|vegetable) margarine\b/.test(request),/vaxtbas|vegan/.test(title),'plant_based_margarine_not_verified'],
+    [/\bcanned\b/.test(request)&&/\b(?:beans?|cannellini)\b/.test(request),packInfo(entry).drainedGrams!==null||/konserv|kokt|fardigkokt/.test(title),'preserved_beans_not_verified'],
+    [/\b(?:dry|dried)\b/.test(request)&&/\bbeans?\b/.test(request),packInfo(entry).drainedGrams===null&&!/konserv|kokt|fardigkokt/.test(title),'dry_beans_incompatible'],
+    [/\bteabags?\b/.test(request),/tepase|tepasar|tea bags?/.test(title),'tea_bag_form_not_verified'],
+    [/\bflour\b/.test(request),/mjol|flour|starkelse/.test(title),'flour_identity_not_verified'],
+    [/\bmedium(?: hot)? salsa\b/.test(request),/\bmedium\b/.test(title),'medium_salsa_not_verified'],
+    [/\bdry roasted\b/.test(request),/torrrost|dry roasted/.test(title),'dry_roasting_not_verified'],
+  ];
+  for(const [required,verified,reason] of checks)if(required&&!verified)return reason;
+  const requested=/(\d+(?:\.\d+)?)%/.exec(request);
+  if(requested){const actual=/(\d+(?:[,.]\d+)?)%/.exec(entry.name);if(!actual||Number(actual[1].replace(',','.'))!==Number(requested[1]))return 'percentage_not_verified';}
+  if(/\bplums?\b/.test(request))for(const [english,swedish] of [['red','rod(?:a)?'],['yellow','gul(?:a)?'],['blue','bla']]){
+    if(new RegExp(`\\b${english}\\b`).test(request)&&!new RegExp(`\\b${swedish}\\b`).test(title))return 'plum_colour_not_verified';
+  }
+  const brands=['philadelphia','velveeta','cool whip','splenda','miracle whip','bisquick','betty crocker','jell o','jello','nutella','kikkoman','tabasco','grey poupon','heinz','weetabix','classico','nestle','mccormick','lea perrins'];
+  for(const brand of brands)if((` ${request} `).includes(` ${brand} `) &&
+    !(`${normalizeText(entry.brand??'')} ${title}`).includes(brand))return 'requested_brand_not_verified';
+  return null;
+}
 export function packInfo(entry: Entry): Pack {
   const label = typeof entry.raw?.displayVolume === 'string' ? entry.raw.displayVolume : '';
   const text = label.toLowerCase().replace(/,/g,'.').replace(/\s/g,'').replace(/^ca:?/, '');
@@ -115,11 +163,14 @@ function classify(name: string): Classified|null {
   };
   return {rule,uncertain,reason,constraints};
 }
-export function buildLinks(requirements: Requirement[], products: Entry[], reviews: Record<string,Decision>={}, now=Date.now()):Link[]{
+export function buildLinks(requirements: Requirement[], products: Entry[], reviews: Record<string,Decision>={}, now=Date.now(),assessments:Record<string,Assessment>={}):Link[]{
   if(!requirements.length || new Set(requirements.map(r=>r.name)).size!==requirements.length ||
     requirements.some(r=>!r.name.trim() || !Number.isSafeInteger(r.occurrences) || r.occurrences<1))throw new Error('Invalid ingredient inventory');
   if(new Set(products.map(p=>p.code)).size!==products.length)throw new Error('Duplicate catalogue products');
   const byCode=new Map(products.map(p=>[p.code,p]));
+  const byIdentity=new Map<string,Entry[]>();
+  for(const p of products){const key=productIdentity(p);const group=byIdentity.get(key)??[];group.push(p);byIdentity.set(key,group);}
+  const catalogueHash=Object.keys(assessments).length?catalogueIdentityHash(products):'';
   const pools=new Map<string,Entry[]>();
   for(const rule of FOOD_RULES){
     const title=new RegExp(rule.title), exclude=rule.exclude?new RegExp(rule.exclude):null;
@@ -135,14 +186,25 @@ export function buildLinks(requirements: Requirement[], products: Entry[], revie
     if(/^(?:(?:boiling|hot|cold|warm|ice|tap|filtered|lukewarm|distilled) )?water$|^ice cubes?$/.test(name) && !reviews[requirement.name]){
       return {...base,status:'non_purchased',reason:'Tap water/ice assumed; no retail SKU or exact water cost assigned'};
     }
-    const review=reviews[requirement.name];
-    let pool=parsed?pools.get(parsed.rule.id)??[]:[];
+    const review=reviews[requirement.name],assessment=assessments[requirement.name];
+    base.assessment=assessment;
+    // An explicit review replaces the generic suggestions, which may have been
+    // based on a misleading token (for example "pepper" in a cheese name).
+    let pool=parsed&&!assessment?pools.get(parsed.rule.id)??[]:[];
     if(parsed)pool=pool.filter(parsed.constraints);
     pool=pool.filter(p=>!productPolicy(p,requirement.name));
-    const basis=review?.basis??parsed?.rule.basis??'kg';
+    const basis=review?.basis??assessment?.basis??parsed?.rule.basis??'kg';
     let candidates=pool.map(p=>candidate(p,basis,now));
     const rejected=new Set(review?.rejectedCodes??(review?.action==='reject'?[review.code]:[]));
     const approvedCodes=new Set(review?.approvedCodes??(review?.action==='approve'?[review.code]:[]));
+    const assessedCodes=new Set<string>();
+    let missingAssessmentIdentity=false;
+    if(assessment?.outcome==='approve')for(const before of assessment.products){
+      const alternatives=(byIdentity.get(productIdentity(before))??[])
+        .filter(p=>!reviewAttributeExclusion(requirement.name,p)&&!rejected.has(p.code));
+      if(!alternatives.length)missingAssessmentIdentity=true;
+      for(const current of alternatives){approvedCodes.add(current.code);assessedCodes.add(current.code);}
+    }
     for(const code of approvedCodes){
       const approved=byCode.get(code);
       if(approved && !productPolicy(approved,requirement.name) && !candidates.some(c=>c.code===code))candidates.push(candidate(approved,basis,now));
@@ -150,12 +212,21 @@ export function buildLinks(requirements: Requirement[], products: Entry[], revie
     candidates=candidates.filter(c=>!rejected.has(c.code));
     candidates.sort((a,b)=>Number(b.eligible)-Number(a.eligible) ||
       (a.comparisonPriceOre??Infinity)-(b.comparisonPriceOre??Infinity) || a.code.localeCompare(b.code));
-    const selected=candidates.find(c=>c.eligible && (approvedCodes.has(c.code)||parsed&&!parsed.uncertain));
+    const selected=candidates.find(c=>c.eligible && (approvedCodes.has(c.code)||!assessment&&parsed&&!parsed.uncertain));
     const reason=!parsed?'No verified food rule; needs bilingual identity review':parsed.reason;
     if(selected){
-      return {...base,review,status:'matched',method:approvedCodes.has(selected.code)?'reviewed':'food_rules',
+      return {...base,review,status:'matched',method:assessedCodes.has(selected.code)?'agent_reviewed':approvedCodes.has(selected.code)?'reviewed':'food_rules',
         selectedCode:selected.code,selectedProduct:selected,candidates:candidates.slice(0,8),
-        reason:approvedCodes.has(selected.code)?review!.reason:reason};
+        reason:assessedCodes.has(selected.code)?assessment!.reason:approvedCodes.has(selected.code)?review!.reason:reason};
+    }
+    if(assessment){
+      const unchanged=assessment.catalogueIdentityHash===catalogueHash;
+      const missing=assessment.outcome==='approve' && missingAssessmentIdentity;
+      return {...base,review,status:assessment.outcome==='unavailable'&&unchanged||assessment.outcome==='approve'&&!missing?'unavailable':'needs_review',
+        method:'agent_reviewed',candidates:candidates.slice(0,8),reason:missing?
+          'Reviewed product identity changed, disappeared or was rejected; compatibility must be rechecked':
+          assessment.outcome==='approve'?'No reviewed compatible product currently has an eligible fresh price':
+          assessment.outcome==='unavailable'&&!unchanged?'Catalogue products or availability changed since the absence review; recheck: '+assessment.reason:assessment.reason};
     }
     return {...base,review,status:!parsed||parsed.uncertain?'needs_review':'unavailable',candidates:candidates.slice(0,8),
       reason:!parsed||parsed.uncertain?reason:pool.length?'No compatible product has an available, fresh comparable price':'No compatible product exists in this store catalogue'};

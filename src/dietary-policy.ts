@@ -1,6 +1,6 @@
 // The owner's ingredient/brand policy. This is a named-food filter, not a
 // certification of hidden ingredients, manufacturing processes or suppliers.
-export const DIETARY_POLICY_VERSION = 'owner-halal-brands-strict-1';
+export const DIETARY_POLICY_VERSION = 'owner-halal-brands-strict-2';
 export const MEAT_BRANDS = ['affco','qibbla halal','agadeer','aladin','jack links'] as const;
 export const CHICKEN_BRANDS = [...MEAT_BRANDS,'eldorado'] as const;
 export const policyText = (s:string) => s.normalize('NFKD').replace(/\p{M}/gu,'').toLowerCase()
@@ -8,7 +8,7 @@ export const policyText = (s:string) => s.normalize('NFKD').replace(/\p{M}/gu,''
 export type MeatKind = 'chicken'|'red_meat'|'other_meat';
 export type PolicyClassification = {blockedReason:string|null;meat:MeatKind|null};
 const plant = /\b(?:vegan|vegetarian|veggie|meatless|plant based|quorn|tempeh)\b|\b(?:soy|soya|imitation|coconut) (?:bacon|beef|chicken|meat|sausage)/;
-const pork = /\b(?:pork|porcine|pig|swine|hog|boar|pancetta|prosciutto|lard|lardons|fatback|guanciale|speck|flask\w*|gris\w*|svin\w*|parmaskinka)\b/;
+const pork = /\b(?:pork|porcine|pig|swine|hog|boar|pancetta|prosciutto|lard|lardons|fatback|guanciale|speck|flask\w*|gris\w*|svin\w*|parmaskinka|cottage roll|jamon)\b/;
 const alcohol = /\b(?:wine|beer|lager|ale|stout|porter|rum|brandy|vodka|bourbon|liqueur|liquor|sherry|whiskey|whisky|tequila|sake|marsala|vermouth|champagne|cognac|armagnac|calvados|amaretto|cointreau|kahlua|baileys|drambuie|grand marnier|triple sec|sambuca|ouzo|limoncello|kirsch|kirschwasser|curacao|frangelico|pernod|pastis|absinthe|aquavit|schnapps|schnaps|grappa|mirin|madeira|benedictine|galliano|campari|chartreuse|alcohol|alcoholic|alkohol|vin|ol|rom|konjak|irish cream|jack daniels|buttershots)\b|\b(?:hard|dry) (?:apple )?cider\b|^(?:gin|port|grenache|merlot|cabernet sauvignon|chardonnay|riesling|zinfandel|sauternes|shaoxing)(?:\b|$)/;
 function withoutNonAlcoholFoods(s:string){
   return s.replace(/\b(?:wine|sherry|champagne|malt|vin) (?:vinegar|vinager|vinagre|vinager)\b/g,'vinegar')
@@ -17,6 +17,9 @@ function withoutNonAlcoholFoods(s:string){
 }
 export function ingredientPolicy(name:string):PolicyClassification {
   const s=policyText(name), isPlant=plant.test(s);
+  if(/\b(?:anisette|ricard|herbsaint|cachaca|pisco|eau de vie)\b|\bcreme de (?:cacao|menthe|cassis)\b/.test(s))return {blockedReason:'alcohol',meat:null};
+  if(/\bdrunken cherries\b/.test(s))return {blockedReason:'uncertain_alcohol_source',meat:null};
+  if(/^thai burgers$/.test(s))return {blockedReason:'uncertain_animal_source',meat:null};
   if(alcohol.test(withoutNonAlcoholFoods(s)))return {blockedReason:'alcohol',meat:null};
   if(/\b(?:blood|blod|blodpudding|blodkorv)\b/.test(s)&&!/\bblood oranges?\b/.test(s))return {blockedReason:'animal_blood',meat:null};
   if(/^(?:cider|pear cider)$/.test(s))return {blockedReason:'uncertain_alcohol_source',meat:null};
@@ -36,10 +39,10 @@ export function ingredientPolicy(name:string):PolicyClassification {
   // Dairy from goats and shellfish 'meat' do not require a slaughter brand.
   if(/\b(?:chicken|chickens|hen|hens|poultry)\b|\b(?:kyckling\w*|hons\w*)\b/.test(s) &&
     !/\b(?:chicken spice|chicken seasoning|poultry seasoning|hen of the woods)\b/.test(s))return {blockedReason:null,meat:'chicken'};
-  if(/\b(?:beef|veal|lamb|mutton|venison|bison|buffalo meat|elk|deer|rabbit|ox|oxtail|steak|steaks|sirloin|tenderloin|brisket|chuck|roast beef|hamburger|hamburgers|ground round|ground chuck|rump roast|round roast|round tip roast|tri tip roast|ribeye)\b|\b(?:notfars|oxfile|lamm\w*|farfars|kalv\w*|ryggbiff|hogrev|biff|kottbuljong)\b/.test(s) &&
+  if(/\b(?:beef|veal|lamb|mutton|venison|bison|buffalo meat|elk|deer|rabbit|ox|oxtail|steak|steaks|sirloin|tenderloin|brisket|chuck|roast beef|hamburger|hamburgers|ground round|ground chuck|rump roast|round roast|round tip roast|tri tip roast|ribeye|bresaola)\b|\b(?:notfars|oxfile|lamm\w*|farfars|kalv\w*|ryggbiff|hogrev|biff|kottbuljong)\b/.test(s) &&
     !/\bhamburger (?:bun|buns|roll|rolls)\b/.test(s) ||
     /\bgoat\b/.test(s) && !/\b(?:cheese|milk|yogurt|yoghurt|butter)\b/.test(s))return {blockedReason:null,meat:'red_meat'};
-  if(/\b(?:turkeys?|ducks?|ducklings?|goose|geese|quails?|pheasants?|partridges?|pigeons?|giblets?|foie gras|alligators?|kangaroos?)\b|\b(?:kalkon\w*|anka|gaslever)\b/.test(s))return {blockedReason:null,meat:'other_meat'};
+  if(/\b(?:turkeys?|ducks?|ducklings?|goose|geese|quails?|pheasants?|partridges?|pigeons?|giblets?|foie gras|alligators?|crocodiles?|kangaroos?)\b|\b(?:kalkon\w*|anka|gaslever)\b/.test(s))return {blockedReason:null,meat:'other_meat'};
   if(/\b(?:meat|meatballs?|meatloaf|sausage|sausages|salami|pepperoni|chorizo|mortadella|bologna|pastrami|jerky|franks|frankfurters?|hot ?dogs?|wieners?|kielbasa|liver|kidneys?|tripe|sweetbreads|blood sausage|blood pudding)\b|\b(?:\w*wurst|korv|kottbullar|blodpudding|blodkorv|lever)\b/.test(s) &&
     !/\b(?:lobster|crab|crabmeat|fish|clam|clams|oyster|oysters|mussel|mussels|shrimp|prawn|scallop|coconut|nut|nuts|kidney bean|kidney beans|meat tenderizer)\b/.test(s))return {blockedReason:null,meat:'other_meat'};
   if(/\b(?:broth|stock|bouillon|consomme|dripping|drippings|bone broth)\b/.test(s) &&

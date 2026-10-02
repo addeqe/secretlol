@@ -1,20 +1,32 @@
 # Live ingredient connections
 
-The active recipe inventory contains **233,846 recipes**, **1,596,207 ingredient occurrences** and **5,085 distinct original ingredient names**, after the owner's ingredient and meat-brand filter. The complete recipe database stays local; only the names, frequencies and product connections are stored in D1. The inventory is `ingredient-data/requirements.json`. Earlier complete-unit and connected databases remain preserved as source snapshots.
+The active recipe inventory contains **233,525 recipes**, **1,595,022 ingredient occurrences** and **5,064 distinct original ingredient names**, after the owner's ingredient and meat-brand filter. The complete recipe database stays local; only the names, frequencies and product connections are stored in D1. The inventory is `ingredient-data/requirements.json`. Earlier complete-unit and connected databases remain preserved as source snapshots.
 
 ## Ingredient and meat-brand policy
 
-`src/dietary-policy.ts` enforces `owner-halal-brands-strict-1`. Named pork and alcoholic ingredients are excluded. The owner also chose to exclude uncertain animal gelling agents/fats/stocks and extracts. Unspecified “vanilla” is excluded because its form is unknown; vanilla beans remain eligible. Explicit vegetarian substitutes, root beer, ginger ale and wine vinegar are not treated as pork/alcohol. Ordinary dairy and processed foods are not automatically excluded merely because their manufacturing ingredients are unavailable: this filter does not certify hidden ingredients or halal manufacturing.
+`src/dietary-policy.ts` enforces `owner-halal-brands-strict-2`. Named pork and alcoholic ingredients are excluded. The owner also chose to exclude uncertain animal gelling agents/fats/stocks and extracts. Unspecified “vanilla” is excluded because its form is unknown; vanilla beans remain eligible. Explicit vegetarian substitutes, root beer, ginger ale and wine vinegar are not treated as pork/alcohol. Ordinary dairy and processed foods are not automatically excluded merely because their manufacturing ingredients are unavailable: this filter does not certify hidden ingredients or halal manufacturing.
 
 Chicken products require **Eldorado, Affco, Qibbla Halal, Agadeer, Aladin or Jack Links**. Other meat, including red meat and other poultry, requires one of those brands **except Eldorado**. Brand matching is exact after capitalization/accent/apostrophe normalization; missing brands are rejected. Named broth, bouillon, animal fat and meat mixtures are subject to the same restrictions. An available product must also have a verified compatible food identity/form and a fresh comparable price. Unknown cuts are not replaced with arbitrary cheap meat; sheep mince is not silently used as ground lamb.
 
-Whole recipes containing an excluded ingredient or meat without a verified permitted match were removed from the active subset. This removed **163,507 recipes** and **1,413,875 ingredient rows**. The filtered database also retains **634,165 reviews**. Names and frequencies are regenerated from the retained rows, so excluded ingredients are never passed to daily matching. Publication rejects a prohibited inventory before database writes. Saved reviews and privileged approvals cannot bypass product restrictions. Pre-policy connection versions cannot be served or resumed through old cursors.
+Whole recipes containing an excluded ingredient or meat without a verified permitted match were removed from the active subset. This removed **163,828 recipes** and **1,415,060 ingredient rows**. The filtered database also retains **633,761 reviews**. Names and frequencies are regenerated from the retained rows, so excluded ingredients are never passed to daily matching. Publication rejects a prohibited inventory before database writes. Saved reviews and privileged approvals cannot bypass product restrictions. Pre-policy connection versions cannot be served or resumed through old cursors.
 
 Daily refreshes may report `unavailable` if all permitted products for a retained meat ingredient disappear. They never fall back to a forbidden brand. Applications must suppress any recipe whose meat has no current eligible match; `recipe_dietary_status` does this for a refreshed local snapshot. To physically rebuild a local subset after catalogue changes, regenerate the policy audit and run `food_unit_reconstruction.dietary_filter`; local recipe files do not update while the computer is off.
 
 Rebuilding is described in `docs/DIETARY_POLICY.md`.
 
-Every name receives an explicit outcome. `matched` means an available product with a fresh comparable price was selected by a food rule or a recorded human decision. `needs_review` means identity, preparation or substitution is uncertain. `unavailable` means the verified food has no eligible product in this store. `non_purchased` covers tap water and ice without inventing a retail product or amount. Tracking 100% of names does **not** mean 100% are connected, costed, or independently verified as correct.
+Every name receives an explicit outcome. `matched` means an available product with a fresh comparable price was selected by a food rule, a reviewed agent decision or a recorded human decision. `needs_review` means identity, preparation or substitution is uncertain. `unavailable` means the verified food has no eligible product in this store. `non_purchased` covers tap water and ice without inventing a retail product or amount. Tracking 100% of names does **not** mean 100% are connected, costed, or independently verified as correct.
+
+## Saved agent reviews
+
+The owner requested GPT-6 Luna review of the full 4,373-name queue from run `b550cb90-a3ad-457f-b296-e588b3d1a118`. Twelve batches cover that queue exactly once. `ingredient-data/review-decisions.json` records the outcomes, reasons, catalogue evidence, model, review date and product identities. Parent corrections are marked individually. A reviewed name can still need clarification: completing the review does not imply accepting a substitution.
+
+Before publication, every proposed approval is checked against the real catalogue, permitted brands, explicit ingredient attributes, stock, freshness and purchasing basis. The parent also checks food identity and preparation; automated attribute checks alone do not establish compatibility. The report declares `correctnessCertified:false`, rather than assigning an invented accuracy percentage.
+
+Daily runs reuse accepted choices and compare current prices among those compatible products. They also accept a replacement ID only when its normalized title and brand match a previously reviewed identity and the current policy, attribute and price checks pass. A changed identity, a missing choice or a recorded rejection returns to an unresolved outcome. Human approvals/rejections take precedence. Negative or ambiguous reviews cannot be bypassed by a general food rule.
+
+Verified catalogue absence decisions reopen if products, identities or availability change; price-only changes preserve the absence assessment. Newly introduced foods and different replacement identities require another review. No agent or paid model runs in the daily workflow. The one-time review uses the owner's existing Codex model access; no separate paid API service or subscription was introduced.
+
+`ingredientReview` in the status report records coverage of the original review queue and the number of reviewed names still active after recipe exclusions. Policy-excluded assessments are retained as evidence but their ingredients are absent from the daily inventory. Recipe removals can also change the frequencies of unrelated ingredients.
 
 ## Automatic operation
 
@@ -73,7 +85,7 @@ The recipe project supplies `python -m food_unit_reconstruction.willys_connectio
 ```bash
 cd /home/adde/Music/food_unit_reconstruction
 .venv/bin/python -m food_unit_reconstruction.willys_connections \
-  --database data/outputs/recipes_with_willys_policy_20261002/recipes_with_willys_policy.sqlite
+  --database data/outputs/recipes_with_willys_luna_20261002/recipes_with_willys_luna.sqlite
 ```
 
 The dietary filter creates the initial subset. Later connection imports update only the small shared connection table. The original unfiltered database has a different inventory and cannot receive filtered connections. Local copies are snapshots; use the cloud API for automatic daily updates in your application or rerun this importer when updating the local copy.
