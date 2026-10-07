@@ -57,6 +57,7 @@ export function connectedConfig() {
   const original = JSON.parse(readFileSync(resolve('wrangler.jsonc'), 'utf8'));
   original.account_id = required('CLOUDFLARE_ACCOUNT_ID');
   original.d1_databases[0].database_id = required('CLOUDFLARE_DATABASE_ID');
+  if(original.d1_databases[1]) original.d1_databases[1].database_id=required('MEAL_DATABASE_ID');
   if (process.env.GITHUB_REPOSITORY) original.vars.GITHUB_REPOSITORY = process.env.GITHUB_REPOSITORY;
   writeFileSync(resolve('wrangler.connected.json'), JSON.stringify(original, null, 2));
 }

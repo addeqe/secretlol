@@ -1,6 +1,7 @@
 import{readFileSync,mkdirSync,writeFileSync}from'node:fs';
 import{resolve}from'node:path';
-import{loadEnv}from'../src/config.ts';
+import{loadEnv,required}from'../src/config.ts';
+import{loadCloudRequirements}from'../src/meal-import.ts';
 import{D1DatabaseClient,LocalDatabase}from'../src/database.ts';
 import{refreshIngredientLinks}from'../src/ingredient-publish.ts';
 loadEnv();
@@ -19,7 +20,8 @@ try{
     if(active[0]?.results?.[0]?.value!==publication.snapshotId)throw new Error('Catalogue publication budget report is for a different snapshot');
   }
   await database.query(readFileSync(new URL('../migrations/0002_ingredients.sql',import.meta.url),'utf8'));
-  const report=await refreshIngredientLinks(database);
+  const inventory=local?undefined:await loadCloudRequirements(new D1DatabaseClient({databaseId:required('MEAL_DATABASE_ID')}));
+  const report=await refreshIngredientLinks(database,inventory);
   if(database instanceof D1DatabaseClient){Object.assign(report,{rowsWritten:database.rowsWritten,rowsRead:database.rowsRead,sizeBytes:database.sizeBytes});}
   mkdirSync('data',{recursive:true});writeFileSync(resolve('data/last-ingredient-report.json'),JSON.stringify(report,null,2)+'\n');
   console.log(JSON.stringify(report,null,2));

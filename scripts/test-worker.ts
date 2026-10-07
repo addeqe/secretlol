@@ -8,10 +8,12 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { normalize } from '../src/products.ts';
 import { LocalDatabase } from '../src/database.ts';
 import { refreshIngredientLinks } from '../src/ingredient-publish.ts';
+import { mealSchema } from '../src/meal-import.ts';
 
 const folder = resolve('data/worker-test'); mkdirSync(folder, { recursive: true });
 const cli = resolve('node_modules/wrangler/bin/wrangler.js');
-const config = resolve('wrangler.jsonc');
+const config=resolve(folder,'wrangler.json');
+const testConfig=JSON.parse(readFileSync(resolve('wrangler.jsonc'),'utf8'));testConfig.main=resolve('worker/index.ts');testConfig.d1_databases[1].database_id='00000000-0000-0000-0000-000000000001';writeFileSync(config,JSON.stringify(testConfig));
 const env: NodeJS.ProcessEnv = { ...process.env, WRANGLER_SEND_METRICS: 'false' };
 delete env.CLOUDFLARE_API_TOKEN; delete env.CLOUDFLARE_ACCOUNT_ID;
 const fixture = JSON.parse(readFileSync(new URL('../tests/fixtures/catalog.json', import.meta.url), 'utf8'));
@@ -22,7 +24,7 @@ sql += readFileSync(new URL('../migrations/0002_ingredients.sql', import.meta.ur
 sql += '\nDELETE FROM catalog_entries; DELETE FROM snapshots; DELETE FROM price_history; DELETE FROM catalog_state;\n';
 sql += `INSERT INTO snapshots VALUES(${[id, fixture.store.storeId, fixture.store.name, date, date, fixture.products.length, 'complete', '{}'].map(quote).join(',')});\n`;
 for (const product of fixture.products) {
-  const entry = normalize({...product,name:product.code==='TEST_MILK_ST'?'Mjölk':product.name}, 'Mejeri, ost & ägg', date);
+  const entry = normalize({...product,name:product.code==='TEST_MILK_ST'?'Mjölk':product.name,displayVolume:product.code==='TEST_MILK_ST'?'1.5l':null}, 'Mejeri, ost & ägg', date);
   sql += `INSERT INTO catalog_entries VALUES(${[id, entry.code, entry.name, entry.brand, entry.priceHash, date, JSON.stringify(entry)].map(quote).join(',')});\n`;
 }
 sql += `INSERT INTO catalog_state VALUES('active_snapshot',${quote(id)});\n`;
@@ -42,6 +44,15 @@ const seed = resolve(folder, 'seed.sql'); writeFileSync(seed, sql);
 const seeded = spawnSync(process.execPath, [cli, 'd1', 'execute', 'DB', '--local', '--config', config,
   '--persist-to', folder, '--file', seed], { env, encoding: 'utf8' });
 if (seeded.status !== 0) throw new Error(`Local D1 test setup failed: ${seeded.stderr}`);
+let mealSql=mealSchema();
+const dataset='a'.repeat(64),manifest={datasetId:dataset,recipes:1,ingredientOccurrences:12,distinctIngredients:2,reviews:1,inventoryHash:'runtime-test',repository:'test/fixture',releaseTag:'test',sourceSha256:dataset};
+const definitions=[{filter_id:1,domain:'diet',key:'vegetarian',label_sv:'Vegetarisk'},{filter_id:2,domain:'allergen',key:'milk',label_sv:'Mjölk'}];
+for(const [key,value] of Object.entries({active_dataset:dataset,ready:dataset,manifest:JSON.stringify(manifest),definitions:JSON.stringify(definitions)}))mealSql+=`INSERT INTO meal_meta VALUES(${quote(key)},${quote(value)});\n`;
+const document={source:{RecipeId:'1',Name:'Runtime milk recipe',RecipeServings:2},ingredients:[{ingredient_index:0,ingredient_original:'milk',unit:'milliliter',measured_quantity:'500'},{ingredient_index:1,ingredient_original:'water',unit:'cup',measured_quantity:'1'}],quality:{state:'consistent'},filters:[{filter_id:1,state:'yes'}],profile:{nutrition_metrics:{nutrients_per_serving:{Calories:100}}},reviews:[{ReviewId:1,Review:'Runtime fixture'}]};
+mealSql+=`INSERT INTO meal_recipes VALUES(${[dataset,1,'Runtime milk recipe',JSON.stringify(['milk','water']),JSON.stringify({id:1,name:'Runtime milk recipe'}),JSON.stringify(document),'fixture'].map(quote).join(',')});\n`;
+mealSql+=`INSERT INTO meal_filter_sets VALUES(${[dataset,'1:yes','[1]'].map(quote).join(',')});\n`;
+const mealSeed=resolve(folder,'meal-seed.sql');writeFileSync(mealSeed,mealSql);
+const seededMeal=spawnSync(process.execPath,[cli,'d1','execute','MEAL_DB','--local','--config',config,'--persist-to',folder,'--file',mealSeed],{env,encoding:'utf8'});if(seededMeal.status!==0)throw new Error('Local meal database test setup failed: '+seededMeal.stderr);
 const port = await new Promise<number>((resolvePort, reject) => {
   const server = createServer(); server.on('error', reject);
   server.listen(0, '127.0.0.1', () => { const address = server.address(); const chosen = typeof address === 'object' && address ? address.port : 0;
@@ -79,7 +90,15 @@ try {
   const review={name:'milk',action:'reject',code:'TEST_MILK_ST',reason:'Runtime test exclusion'};
   assert.equal((await fetch(`${base}/ingredients/review`,{method:'POST',headers,body:JSON.stringify(review)})).status,401);
   assert.equal((await fetch(`${base}/ingredients/review`,{method:'POST',headers:{...headers,Authorization:`Bearer ${token}-review`},body:JSON.stringify(review)})).status,200);
-  console.log('Local Cloudflare runtime: schema, private API, connections, separate review authorization, freshness, pagination and pack prices passed. No remote resources were used.');
+  const mealStatus=await(await fetch(`${base}/meal/status`,{headers})).json() as any;
+  assert.equal(mealStatus.ready,true);assert.equal(mealStatus.connectionsCurrent,true);
+  const mealSearch=await(await fetch(`${base}/meal/recipes?diet=vegetarian`,{headers})).json() as any;assert.equal(mealSearch.recipes[0].id,1);
+  const recipe=await(await fetch(`${base}/meal/recipes/1`,{headers})).json() as any;assert.equal(recipe.ingredients[0].connection.willysItemId,'TEST_MILK_ST');
+  const mealQuote=await(await fetch(`${base}/meal/quote`,{method:'POST',headers,body:JSON.stringify({recipes:[{recipeId:1,servings:4}]})})).json() as any;
+  assert.equal(mealQuote.complete,true);assert.equal(mealQuote.consumedCostOre,1127);assert.equal(mealQuote.shoppingList[0].packs,1);
+  const archive=await(await fetch(`${base}/meal/recipes/1/archive`,{headers})).json() as any;assert.equal(archive.reviews[0].Review,'Runtime fixture');
+  const openapi=await(await fetch(`${base}/meal/openapi.json`,{headers})).json() as any;assert.equal(openapi.openapi,'3.1.0');
+  console.log('Local Cloudflare runtime: schema, private API, connections, separate review authorization, freshness, pagination pack prices, separate recipe DB binding, filtered search, current connections, quotes, archives and OpenAPI passed. No remote resources were used.');
 } catch (error) {
   console.error(output.slice(-4000)); throw error;
 } finally {

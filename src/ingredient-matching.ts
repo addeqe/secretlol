@@ -8,8 +8,10 @@ import {catalogueIdentityHash,productIdentity} from './ingredient-assessments.ts
 import type {Assessment} from './ingredient-assessments.ts';
 
 export type Requirement = { name: string; occurrences: number };
-export type Pack = { label: string; quantity: number | null; unit: 'g' | 'ml' | 'piece' | null;
-  drainedGrams: number | null; approximate: boolean };
+import {packInfo} from './product-pack.ts';
+import type {Pack} from './product-pack.ts';
+export {packInfo} from './product-pack.ts';
+export type {Pack} from './product-pack.ts';
 export type Candidate = { code: string; name: string; brand: string | null; available: boolean;
   comparisonPriceOre: number | null; comparisonUnit: string; priceOre: number | null;
   priceUnit: string; pack: Pack; observedAt: string; expiresAt: string; eligible: boolean; exclusion: string | null };
@@ -71,22 +73,7 @@ export function reviewAttributeExclusion(name:string,entry:Entry):string|null {
     !(`${normalizeText(entry.brand??'')} ${title}`).includes(brand))return 'requested_brand_not_verified';
   return null;
 }
-export function packInfo(entry: Entry): Pack {
-  const label = typeof entry.raw?.displayVolume === 'string' ? entry.raw.displayVolume : '';
-  const text = label.toLowerCase().replace(/,/g,'.').replace(/\s/g,'').replace(/^ca:?/, '');
-  let quantity: number | null = null, unit: Pack['unit'] = null, drainedGrams: number | null = null;
-  const weight = /^(\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)(kg|g)$/.exec(text);
-  const cubes = /^(\d+)(?:p|st)\/\d+(?:\.\d+)?l$/.exec(text);
-  const multi = /^(?:(\d+)x)?(\d+(?:\.\d+)?)(kg|g|ml|cl|dl|l|p|st|pack)$/.exec(text);
-  if(cubes){quantity=Number(cubes[1]);unit='piece';}
-  else if (weight) { const scale=weight[3]==='kg'?1000:1; quantity=Number(weight[1])*scale; drainedGrams=Number(weight[2])*scale;unit='g'; }
-  else if (multi) {
-    const scale: Record<string,number>={kg:1000,g:1,l:1000,dl:100,cl:10,ml:1,p:1,st:1,pack:1};
-    quantity=Number(multi[1]??1)*Number(multi[2])*scale[multi[3]];
-    unit=/^(kg|g)$/.test(multi[3])?'g':/^(ml|cl|dl|l)$/.test(multi[3])?'ml':'piece';
-  }
-  return {label,quantity,unit,drainedGrams,approximate:/^ca/i.test(label) || /kr\/kg/i.test(entry.priceUnit)};
-}
+
 function expiry(entry: Entry) {
   let until=Date.parse(entry.observedAt)+86400000;
   for(const offer of entry.offers as Array<{validUntil?: number}>){

@@ -42,7 +42,8 @@ export async function refreshIngredientLinks(database:Database, inventory=loadRe
     const links=buildLinks(inventory.requirements,products,reviews,Date.now(),assessed.records);
     const report={...summarizeLinks(links),recipes:inventory.recipes,storeId:snapshot.store_id,
       catalogueSnapshotId:snapshot.id,runId:id,completedAt:new Date().toISOString(),inventoryHash:inventory.hash,
-      matcherVersion:MATCHER_VERSION,selectionPolicy:'lowest comparable listed price among verified compatible available products; conditional offers are not assumed',
+      inventorySource:'inventorySource' in inventory?inventory.inventorySource:'local-fixture',
+      datasetId:'datasetId' in inventory?inventory.datasetId:null,matcherVersion:MATCHER_VERSION,selectionPolicy:'lowest comparable listed price among verified compatible available products; conditional offers are not assumed',
       dietaryPolicy:DIETARY_POLICY,ingredientReview:{...assessed.report,
         activeReviewedNames:inventory.requirements.filter(r=>assessed.records[r.name]).length},conversionComplete:false};
     const previousId=String((await rows(database,"SELECT value FROM catalog_state WHERE key='active_ingredient_run'"))[0]?.value??'');
@@ -80,10 +81,11 @@ export async function refreshIngredientLinks(database:Database, inventory=loadRe
       {sql:"UPDATE ingredient_runs SET status='complete' WHERE id=?",params:[id]},
       {sql:"INSERT INTO catalog_state VALUES('active_ingredient_run',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params:[id]}
     ]);
-    // A pre-policy snapshot must not retain prohibited connections. Modern
-    // snapshots with the same policy can still support pinned pagination.
+    // Only snapshots of the same retained inventory/policy can support pinned
+    // pagination; discard the old larger inventory when switching to cloud.
     const previous=(await rows(database,'SELECT report_json FROM ingredient_runs WHERE id=?',[previousId]))[0];
-    if(previous && JSON.parse(String(previous.report_json)).dietaryPolicy?.version!==DIETARY_POLICY_VERSION){
+    const priorReport=previous?JSON.parse(String(previous.report_json)):null;
+    if(priorReport&&(priorReport.dietaryPolicy?.version!==DIETARY_POLICY_VERSION||priorReport.inventoryHash!==inventory.hash)){
       await database.query('DELETE FROM ingredient_links WHERE run_id=?',[previousId]);
       await database.query('DELETE FROM ingredient_runs WHERE id=?',[previousId]);
     }

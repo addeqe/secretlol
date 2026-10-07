@@ -1,0 +1,98 @@
+{
+  "schemaVersion": 1,
+  "datasetId": "197dbbdb71b22b9afd75a98098cb935d71dd5d1af8a7e22ef07e84f6632a693b",
+  "sourceSha256": "197dbbdb71b22b9afd75a98098cb935d71dd5d1af8a7e22ef07e84f6632a693b",
+  "createdAt": "2026-10-07T17:04:13.131365+00:00",
+  "recipes": 15244,
+  "ingredientOccurrences": 96082,
+  "distinctIngredients": 881,
+  "reviews": 60494,
+  "inventoryHash": "bfb141d7a9a9b9338186e4aa7789f0562df28065ec3dab81424de779a1f8b134",
+  "filterSets": 235,
+  "sourceCounts": {
+    "metadata": 19,
+    "recipes": 15244,
+    "ingredients": 96082,
+    "reviews": 60494,
+    "ingredient_product_connections": 881,
+    "filter_definitions": 171,
+    "classification_runs": 1,
+    "ingredient_filter_subjects": 881,
+    "ingredient_filter_classifications": 28192,
+    "recipe_filter_classifications": 653499,
+    "recipe_filter_profiles": 15244,
+    "recipe_ingredient_quality": 15244
+  },
+  "common": {
+    "file": "common.json.gz",
+    "sha256": "5fd84c33ecc7c1c75e706e8768d3d7e6568034d2c4de565fe2a6884cedcfbfc0",
+    "bytes": 1893925,
+    "uncompressedBytes": 11297911
+  },
+  "parts": [
+    {
+      "file": "day-1.jsonl.gz",
+      "sha256": "ed4d41bee81f68d48daf9e80049d0194aae3c63b106940e5195c5073d013b907",
+      "bytes": 9859292,
+      "uncompressedBytes": 82403250,
+      "day": 1,
+      "recipes": 3049,
+      "firstId": 38,
+      "lastId": 104703,
+      "maxEstimatedWrites": 4175
+    },
+    {
+      "file": "day-2.jsonl.gz",
+      "sha256": "625c53cf45a8d10ee6b92adb2e7e3a6698cc5f22e9b5bd839c6ee16dc53f82e0",
+      "bytes": 7046470,
+      "uncompressedBytes": 74017837,
+      "day": 2,
+      "recipes": 3049,
+      "firstId": 104717,
+      "lastId": 211639,
+      "maxEstimatedWrites": 3059
+    },
+    {
+      "file": "day-3.jsonl.gz",
+      "sha256": "ba078a634bd969c3c6cee68ab45c5c5a7b428fdcdd2e4c57a60e40d358a54026",
+      "bytes": 6059024,
+      "uncompressedBytes": 71404602,
+      "day": 3,
+      "recipes": 3049,
+      "firstId": 211646,
+      "lastId": 323899,
+      "maxEstimatedWrites": 3059
+    },
+    {
+      "file": "day-4.jsonl.gz",
+      "sha256": "8749e8a5e0109bbf93073b45e05e22d1d26663db37a2cd280fc8743be9270ac8",
+      "bytes": 5895484,
+      "uncompressedBytes": 70941681,
+      "day": 4,
+      "recipes": 3049,
+      "firstId": 323904,
+      "lastId": 433685,
+      "maxEstimatedWrites": 3059
+    },
+    {
+      "file": "day-5.jsonl.gz",
+      "sha256": "2ab6c4cc2215c485d7dabc4134a85bb62015493be6dfa8f7a5f80cc2b8a093f0",
+      "bytes": 5161037,
+      "uncompressedBytes": 68227179,
+      "day": 5,
+      "recipes": 3048,
+      "firstId": 433730,
+      "lastId": 541349,
+      "maxEstimatedWrites": 3058
+    }
+  ],
+  "archive": {
+    "file": "recipes_with_filters.sqlite.gz",
+    "sha256": "7b845ce6a2bec9262d36933ce9d09220e83b13a43e78884ef9bc08bb220be612",
+    "bytes": 37331109
+  },
+  "documentBytes": 308548294,
+  "maxDocumentBytes": 529572,
+  "releaseTag": "meal-data-2026-10-07",
+  "repository": "addeqe/secretlol"
+}
