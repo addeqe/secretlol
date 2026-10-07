@@ -37,6 +37,7 @@ Den exakta SQLite-filen finns komprimerad som GitHub-releasebilaga. Kontrollsumm
 | `GET /meal/recipes/123/cost?servings=4` | Kostnadsunderlag och inköpslista för ett recept |
 | `POST /meal/quote` | Gemensam kostnadsberäkning/inköpslista för flera recept |
 | `GET /meal/ingredients?limit=50` | Ingrediensklassificeringar och aktuella Willys-kopplingar |
+| `GET /meal/ingredients/archive?name=eggs` | Komplett klassificerings- och kopplingsbevis från ursprungsdatabasen; historiska priser används inte som aktuella |
 | `POST /meal/ingredients/lookup` | Samma information för upp till 100 exakta ingrediensnamn |
 | `GET /status` | Katalogens aktualitet och butik |
 | `GET /products/PRODUCT_ID` | Produktens aktuella pris, erbjudanden och paketuppgifter |

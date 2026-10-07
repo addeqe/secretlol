@@ -44,7 +44,7 @@ const seed = resolve(folder, 'seed.sql'); writeFileSync(seed, sql);
 const seeded = spawnSync(process.execPath, [cli, 'd1', 'execute', 'DB', '--local', '--config', config,
   '--persist-to', folder, '--file', seed], { env, encoding: 'utf8' });
 if (seeded.status !== 0) throw new Error(`Local D1 test setup failed: ${seeded.stderr}`);
-let mealSql=mealSchema();
+let mealSql=mealSchema()+'\nDELETE FROM meal_import_progress; DELETE FROM meal_filter_sets; DELETE FROM meal_ingredients; DELETE FROM meal_recipes; DELETE FROM meal_meta;\n';
 const dataset='a'.repeat(64),manifest={datasetId:dataset,recipes:1,ingredientOccurrences:12,distinctIngredients:2,reviews:1,inventoryHash:'runtime-test',repository:'test/fixture',releaseTag:'test',sourceSha256:dataset};
 const definitions=[{filter_id:1,domain:'diet',key:'vegetarian',label_sv:'Vegetarisk'},{filter_id:2,domain:'allergen',key:'milk',label_sv:'Mjölk'}];
 for(const [key,value] of Object.entries({active_dataset:dataset,ready:dataset,manifest:JSON.stringify(manifest),definitions:JSON.stringify(definitions)}))mealSql+=`INSERT INTO meal_meta VALUES(${quote(key)},${quote(value)});\n`;

@@ -150,6 +150,11 @@ export async function mealRoutes(request:Request,env:MealEnv,requestJson:(r:Requ
     const result=await env.MEAL_DB.prepare(sql).bind(...params).all<{recipe_id:number;summary_json:string}>();const shown=result.results.slice(0,limit);
     return json({datasetId:m.datasetId,recipes:shown.map(r=>JSON.parse(r.summary_json)),nextCursor:result.results.length>limit?encode([m.datasetId,shown.at(-1)!.recipe_id,criteria,availableOnly?version.run!.id:null]):null,catalogueSnapshotId:version.snapshot?.id??null,connectionsCurrent:version.current});
   }
+  if(route==='/meal/ingredients/archive'&&request.method==='GET'){
+    const name=u.searchParams.get('name');if(!name||name.length>1000)return fail('ingredient_name_required');
+    const row=await env.MEAL_DB.prepare('SELECT document_json FROM meal_ingredients WHERE dataset_id=? AND ingredient_name=?').bind(m.datasetId,name).first<{document_json:string}>();
+    return row?new Response(row.document_json,{headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}}):fail('ingredient_not_found',404);
+  }
   if((route==='/meal/ingredients'||route==='/meal/ingredients/lookup')&&(request.method==='GET'||request.method==='POST')){
     const limit=bounded(u,'limit',50,1,100);let names:string[]|null=null,after='';
     if(route.endsWith('/lookup')){
