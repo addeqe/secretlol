@@ -59,7 +59,7 @@ export async function nextImportPart(database:Database,m:MealManifest,today=new 
   if(progress.at(-1)&&String(progress.at(-1)!.completed_at).slice(0,10)>=today)return {complete:false,part:null,waitingForNextDay:true};
   return {complete:false,part:m.parts[progress.length]};
 }
-export async function uploadPart(database:Database,m:MealManifest,part:MealManifest['parts'][number],records:MealRecord[],completedAt=new Date().toISOString()){
+export async function uploadPart(database:Database,m:MealManifest,part:MealManifest['parts'][number],records:MealRecord[],completedAt?:string){
   if(records.length!==part.recipes||records[0]?.id!==part.firstId||records.at(-1)?.id!==part.lastId
     ||new Set(records.map(r=>r.id)).size!==records.length)throw new Error('Recipe part count/order mismatch');
   for(const r of records){
@@ -90,7 +90,7 @@ export async function uploadPart(database:Database,m:MealManifest,part:MealManif
     await loadCloudRequirements(database);
   }
   await database.batch([
-    {sql:'INSERT INTO meal_import_progress VALUES(?,?,?,?,?)',params:[m.datasetId,part.day,part.sha256,completedAt,part.recipes]},
+    {sql:'INSERT INTO meal_import_progress VALUES(?,?,?,?,?)',params:[m.datasetId,part.day,part.sha256,completedAt??new Date().toISOString(),part.recipes]},
     ...(part.day===5?[{sql:"INSERT INTO meal_meta VALUES('ready',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params:[m.datasetId]}]:[])
   ]);
   return {part:part.day,uploadedRecipes:Number(counts.n),totalRecipes:m.recipes,complete:part.day===5,...(database instanceof D1DatabaseClient?{rowsWritten:database.rowsWritten,sizeBytes:database.sizeBytes}:{})};
