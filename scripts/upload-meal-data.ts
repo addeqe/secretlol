@@ -14,7 +14,7 @@ try{
   const usage=await response.json() as any;
   if(!response.ok||usage.errors?.length||!usage.data?.viewer?.accounts?.[0])throw new Error('Daily account write usage could not be verified; import postponed');
   const used=usage.data.viewer.accounts[0].d1AnalyticsAdaptiveGroups.reduce((n:number,g:any)=>n+g.sum.rowsWritten,0);
-  if(!Number.isFinite(used)||used+9000>90000)throw new Error('Insufficient daily free write headroom; import postponed');
+  if(!Number.isFinite(used)||used+9000+20000>90000)throw new Error('Insufficient daily free write headroom; import postponed');
   await database.query(mealSchema());
   const next=await nextImportPart(database,m);
   let report:any=next;

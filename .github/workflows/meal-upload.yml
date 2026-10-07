@@ -34,6 +34,8 @@ jobs:
       - name: Import at most one fifth per UTC day
         run: npm run meal:upload
       - name: Use cloud ingredient inventory
+        env:
+          MAX_D1_ROWS_WRITTEN: '20000'
         run: npm run ingredients:refresh
       - name: Summarize upload progress
         run: |
