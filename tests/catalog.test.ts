@@ -223,3 +223,43 @@ test('first-time Cloudflare address setup recognizes an unregistered subdomain',
     await assert.rejects(cloudflare('/accounts/test/workers/subdomain', 'GET', undefined, true), /HTTP 403/);
   } finally { globalThis.fetch = original; if (token === undefined) delete process.env.CLOUDFLARE_API_TOKEN; else process.env.CLOUDFLARE_API_TOKEN = token; }
 });
+
+
+test('a timeout after response headers retries the same page and preserves request pacing/cookies', async () => {
+  let now = Date.parse('2026-10-08T04:00:00Z');
+  const times: number[] = [], cookies: string[] = [], urls: string[] = [];
+  const client = new WillysClient({ now: () => now, wait: async ms => { now += ms; },
+    fetcher: async (url, options) => {
+      times.push(now); urls.push(String(url)); cookies.push(new Headers(options?.headers).get('Cookie') ?? '');
+      if (times.length === 1) return new Response(new ReadableStream({ start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"results":['));
+        controller.error(new DOMException('The operation was aborted due to timeout', 'TimeoutError'));
+      } }), { headers: { 'Set-Cookie': 'JSESSIONID=retained-session; Path=/' } });
+      return Response.json(page([raw()]));
+    } });
+  const result = await client.category('mejeri-ost-och-agg', 0);
+  assert.equal(result.results.length, 1); assert.equal(client.requests, 2);
+  assert.equal(urls[0], urls[1]); assert.equal(times[1] - times[0], 10000);
+  assert.match(cookies[1], /JSESSIONID=retained-session/);
+});
+test('repeated response body failures stop after three attempts without publishing partial data', async () => {
+  let now = Date.parse('2026-10-08T04:00:00Z');
+  const client = new WillysClient({ now: () => now, wait: async ms => { now += ms; },
+    fetcher: async () => new Response(new ReadableStream({ start(controller) {
+      controller.error(new DOMException('Disconnected body', 'AbortError'));
+    } })) });
+  await assert.rejects(client.category('mejeri-ost-och-agg', 4), /body failed after 3 attempts.*page=4.*No catalogue published/);
+  assert.equal(client.requests, 3);
+});
+test('body retries still obey the retailer visit window and request budget', async () => {
+  for (const constraint of ['window', 'budget']) {
+    let now = Date.parse('2026-10-08T08:44:55Z');
+    const client = new WillysClient({ maxRequests: constraint === 'budget' ? 1 : 300,
+      now: () => now, wait: async ms => { now += ms; }, fetcher: async () => new Response(new ReadableStream({ start(controller) {
+        controller.error(new DOMException('Timed out body', 'TimeoutError'));
+      } })) });
+    if (constraint === 'budget') now = Date.parse('2026-10-08T04:00:00Z');
+    await assert.rejects(client.category('mejeri-ost-och-agg'), constraint === 'window' ? /Outside Willys crawl window/ : /request\/runtime budget/);
+    assert.equal(client.requests, 1);
+  }
+});

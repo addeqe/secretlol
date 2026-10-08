@@ -61,7 +61,17 @@ export class WillysClient {
         continue;
       }
       if (!response.ok) throw new Error(`Willys HTTP ${response.status}: ${url.pathname}. No catalogue published.`);
-      const raw = await response.text();
+      let raw: string;
+      try { raw = await response.text(); }
+      catch {
+        // The timeout signal stays active after fetch resolves its headers.
+        // A slow/interrupted response body must retry the same page as well.
+        if (attempt < 2) {
+          console.warn(`Willys response body interrupted: ${url.pathname}${url.search}; retry ${attempt + 2}/3.`);
+          continue;
+        }
+        throw new Error(`Willys response body failed after 3 attempts: ${url.pathname}${url.search}. No catalogue published.`);
+      }
       if (raw.length > 6 * 1024 * 1024) throw new Error('Oversized Willys response');
       if (text) return raw;
       try { return JSON.parse(raw); } catch { throw new Error(`Non-JSON Willys response: ${url.pathname}`); }
