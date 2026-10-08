@@ -1,9 +1,27 @@
 import {DIETARY_POLICY_VERSION,ingredientPolicy,productPolicy} from '../src/dietary-policy.ts';
+import {candidate} from '../src/ingredient-candidate.ts';
 
 type Env={DB:D1Database;GITHUB_REPOSITORY?:string;GITHUB_DISPATCH_TOKEN?:string};
 type Run={id:string;catalogue_snapshot_id:string;created_at:string;report_json:string};
 const json=(value:unknown,status=200)=>Response.json(value,{status,headers:{'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
 const codeValid=(code:unknown):code is string=>typeof code==='string'&&/^[a-zA-Z0-9_-]{1,100}$/.test(code);
+async function hydrateLinks(db:D1Database,run:Run,records:Array<{data_json:string}>,now=Date.now()){
+  const docs=records.map(r=>JSON.parse(r.data_json));
+  if(docs.some(d=>!Array.isArray(d.candidateCodes)))return docs;
+  const codes=[...new Set(docs.flatMap(d=>[d.selectedCode,...(d.candidateCodes??[])].filter(Boolean)))];
+  if(!codes.length)return docs.map(d=>{const {candidateCodes,_priceBasis,priceBasis,...rest}=d;return {...rest,selectedProduct:null,candidates:[]};});
+  const products=await db.prepare(`SELECT code,json_remove(data_json,'$.raw','$.price','$.sourcePricing','$.priceHash') AS data_json,
+      json_extract(data_json,'$.raw.displayVolume') AS pack_label FROM catalog_entries_read WHERE snapshot_id=?
+    AND code IN (SELECT value FROM json_each(?))`).bind(run.catalogue_snapshot_id,JSON.stringify(codes)).all<{code:string;data_json:string;pack_label:string}>();
+  const map=new Map(products.results.map(p=>{const entry=JSON.parse(p.data_json);entry.raw={displayVolume:p.pack_label};return[p.code,entry]}));
+  return docs.map(d=>{
+    const basis=d.priceBasis??'kg',codes=d.candidateCodes??[];
+    const candidates=codes.map((code:string)=>map.get(code)).filter(Boolean).map((p:any)=>candidate(p,basis,now));
+    const selected=d.selectedCode?map.get(d.selectedCode):null;
+    const {candidateCodes,_priceBasis,priceBasis,...rest}=d;
+    return {...rest,selectedProduct:selected?candidate(selected,basis,now):null,candidates};
+  });
+}
 function encodeCursor(run:string,name:string,frequency?:number){return btoa(String.fromCharCode(...new TextEncoder().encode(JSON.stringify([run,name,frequency??null])))).replace(/\+/g,'-').replace(/\//g,'_');}
 function decodeCursor(cursor:string){
   try{const bytes=Uint8Array.from(atob(cursor.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0));
@@ -11,7 +29,7 @@ function decodeCursor(cursor:string){
     if(!/^[a-f0-9-]{36}$/i.test(run)||typeof name!=='string'||!name||name.length>1000||frequency!=null&&(!Number.isSafeInteger(frequency)||frequency<1))throw new Error();return {run,name,frequency};
   }catch{throw new Error('invalid_cursor');}
 }
-export async function ingredientRoutes(request:Request,env:Env,snapshot:{id:string;store_id:string},requestJson:(r:Request)=>Promise<any>){
+export async function ingredientRoutes(request:Request,env:Env,snapshot:{id:string;store_id:string;oldest_observation_at?:string|null},requestJson:(r:Request)=>Promise<any>){
   const url=new URL(request.url),route=url.pathname;
   let run=await env.DB.prepare(`SELECT * FROM ingredient_runs WHERE id=(SELECT value FROM catalog_state
     WHERE key='active_ingredient_run') AND status='complete'`).first<Run>();
@@ -21,7 +39,7 @@ export async function ingredientRoutes(request:Request,env:Env,snapshot:{id:stri
     const q=(url.searchParams.get('q')??'').trim();
     if(q.length<2||new TextEncoder().encode(q).length>40)return json({error:'search_must_be_2_to_40_bytes'},400);
     const records=await env.DB.prepare(`SELECT json_remove(data_json,'$.raw','$.price','$.sourcePricing','$.priceHash') AS data_json,
-      json_extract(data_json,'$.raw.displayVolume') AS pack_label FROM catalog_entries WHERE snapshot_id=?
+      json_extract(data_json,'$.raw.displayVolume') AS pack_label FROM catalog_entries_read WHERE snapshot_id=?
       AND instr(lower(replace(replace(replace(name,'Å','å'),'Ä','ä'),'Ö','ö')),?)>0 ORDER BY name LIMIT 30`)
       .bind(snapshot.id,q.toLowerCase()).all<{data_json:string;pack_label:string}>();
     return json({products:records.results.map(r=>({...JSON.parse(r.data_json),packLabel:r.pack_label})).filter(p=>!productPolicy(p))});
@@ -29,7 +47,7 @@ export async function ingredientRoutes(request:Request,env:Env,snapshot:{id:stri
   if(route==='/ingredients/history'&&request.method==='GET'){
     const name=url.searchParams.get('name');if(!name||name.length>1000)return json({error:'ingredient_name_required'},400);
     if(ingredientPolicy(name).blockedReason)return json({error:'ingredient_excluded_by_policy'},400);
-    if(!await env.DB.prepare('SELECT 1 AS ok FROM ingredient_links WHERE run_id=? AND ingredient_name=?').bind(run.id,name).first())return json({error:'unknown_ingredient'},404);
+    if(!await env.DB.prepare('SELECT 1 AS ok FROM ingredient_links_read WHERE run_id=? AND ingredient_name=?').bind(run.id,name).first())return json({error:'unknown_ingredient'},404);
     const history=await env.DB.prepare('SELECT * FROM ingredient_change_history WHERE ingredient_name=? ORDER BY changed_at DESC LIMIT 100').bind(name).all();
     return json({name,changes:history.results});
   }
@@ -42,10 +60,10 @@ export async function ingredientRoutes(request:Request,env:Env,snapshot:{id:stri
     return json(response.ok?{queued:true}:{error:'refresh_dispatch_failed'},response.ok?202:503);
   }
   if(route==='/ingredients/status'&&request.method==='GET'){
-    const observation=await env.DB.prepare('SELECT MIN(observed_at) AS oldest FROM catalog_entries WHERE snapshot_id=?').bind(snapshot.id).first<{oldest:string}>();
+    const oldest=snapshot.oldest_observation_at??(await env.DB.prepare('SELECT MIN(observed_at) AS oldest FROM catalog_entries_read WHERE snapshot_id=?').bind(snapshot.id).first<{oldest:string}>())?.oldest;
     return json({...JSON.parse(run.report_json),lastSuccessfulConnectionRefresh:run.created_at,
       activeCatalogueSnapshotId:snapshot.id,connectionsCurrent:run.catalogue_snapshot_id===snapshot.id,
-      catalogueFresh:!!observation?.oldest&&Date.now()-Date.parse(observation.oldest)<86400000,
+      catalogueFresh:!!oldest&&Date.now()-Date.parse(oldest)<86400000,
       lastRunTrackedAllIngredients:true});
   }
   if(route==='/ingredients'&&request.method==='GET'){
@@ -61,23 +79,25 @@ export async function ingredientRoutes(request:Request,env:Env,snapshot:{id:stri
     }
     const status=url.searchParams.get('status'),q=url.searchParams.get('q')??'';
     if(status&&!['matched','needs_review','unavailable','non_purchased'].includes(status)||new TextEncoder().encode(q).length>40)return json({error:'invalid_filter'},400);
-    const records=await env.DB.prepare(`SELECT ingredient_name,occurrences,data_json FROM ingredient_links WHERE run_id=?
+    const records=await env.DB.prepare(`SELECT ingredient_name,occurrences,data_json FROM ingredient_links_read WHERE run_id=?
       AND ${priority?'(? IS NULL OR occurrences<? OR (occurrences=? AND ingredient_name>?))':'ingredient_name>?'}
       AND (? IS NULL OR status=?) AND (?='' OR instr(lower(ingredient_name),lower(?))>0)
       ORDER BY ${priority?'occurrences DESC,':''}ingredient_name LIMIT ?`)
       .bind(run.id,...(priority?[frequency,frequency,frequency,after]:[after]),status,status,q,q,limit+1)
       .all<{ingredient_name:string;occurrences:number;data_json:string}>();
     const shown=records.results.slice(0,limit),current=run.catalogue_snapshot_id===snapshot.id;
+    const hydrated=await hydrateLinks(env.DB,run,shown);
     return json({runId:run.id,catalogueSnapshotId:run.catalogue_snapshot_id,connectionsCurrent:current,
-      ingredients:shown.map(r=>({...JSON.parse(r.data_json),connectionsCurrent:current})),
+      ingredients:shown.map((r,i)=>({...hydrated[i],connectionsCurrent:current})),
       nextCursor:records.results.length>limit?encodeCursor(run.id,shown.at(-1)!.ingredient_name,priority?shown.at(-1)!.occurrences:undefined):null});
   }
   if(route==='/ingredients/lookup'&&request.method==='POST'){
     const body=await requestJson(request);
     if(!body||!Array.isArray(body.ingredients)||body.ingredients.length>100||body.ingredients.some((n:unknown)=>typeof n!=='string'||!n||n.length>1000))return json({error:'invalid_ingredients',message:'Supply at most 100 exact original ingredient names.'},400);
-    const records=await env.DB.prepare(`SELECT l.ingredient_name,l.data_json FROM ingredient_links l
+    const records=await env.DB.prepare(`SELECT l.ingredient_name,l.data_json FROM ingredient_links_read l
       WHERE l.run_id=? AND l.ingredient_name IN (SELECT value FROM json_each(?))`).bind(run.id,JSON.stringify(body.ingredients)).all<{ingredient_name:string;data_json:string}>();
-    const map=new Map(records.results.map(r=>[r.ingredient_name,JSON.parse(r.data_json)]));
+    const hydrated=await hydrateLinks(env.DB,run,records.results);
+    const map=new Map(records.results.map((r,i)=>[r.ingredient_name,hydrated[i]]));
     const current=run.catalogue_snapshot_id===snapshot.id;
     return json({runId:run.id,catalogueSnapshotId:run.catalogue_snapshot_id,connectionsCurrent:current,
       ingredients:body.ingredients.map((name:string)=>{
@@ -92,10 +112,10 @@ export async function ingredientRoutes(request:Request,env:Env,snapshot:{id:stri
       !codeValid(body.code)&&body.action!=='clear'||typeof body.reason!=='string'||body.reason.trim().length<5||body.reason.length>1000||
       body.basis!==undefined&&!['kg','l','piece'].includes(body.basis))return json({error:'invalid_review'},400);
     if(ingredientPolicy(body.name).blockedReason)return json({error:'ingredient_excluded_by_policy'},400);
-    const found=await env.DB.prepare('SELECT 1 AS ok FROM ingredient_links WHERE run_id=? AND ingredient_name=?').bind(run.id,body.name).first();
+    const found=await env.DB.prepare('SELECT 1 AS ok FROM ingredient_links_read WHERE run_id=? AND ingredient_name=?').bind(run.id,body.name).first();
     if(!found)return json({error:'unknown_ingredient'},404);
     if(body.action!=='clear'){
-      const product=await env.DB.prepare('SELECT data_json FROM catalog_entries WHERE snapshot_id=? AND code=?').bind(snapshot.id,body.code).first<{data_json:string}>();
+      const product=await env.DB.prepare('SELECT data_json FROM catalog_entries_read WHERE snapshot_id=? AND code=?').bind(snapshot.id,body.code).first<{data_json:string}>();
       if(!product)return json({error:'unknown_product'},404);
       if(body.action==='approve'){
         const violation=productPolicy(JSON.parse(product.data_json),body.name);

@@ -7,6 +7,8 @@ import {buildLinks,packInfo,reviewAttributeExclusion} from '../src/ingredient-ma
 import {catalogueIdentityHash} from '../src/ingredient-assessments.ts';
 import type {Assessment} from '../src/ingredient-assessments.ts';
 import {refreshIngredientLinks} from '../src/ingredient-publish.ts';
+import {catalogStorageSchema} from '../src/catalog-storage.ts';
+import {ensureIngredientStorage,seedIngredientStorage} from '../src/ingredient-storage.ts';
 import {publish} from '../src/publish.ts';
 import {handle} from '../worker/index.ts';
 import type {Entry,Scan,Statement} from '../src/types.ts';
@@ -28,8 +30,8 @@ test('the combined free write budget stops an ingredient refresh before any clou
   await assert.rejects(refreshIngredientLinks(database,inv),/free write budget/);
   assert.equal(requests,0);
 });
-function db(){const d=new LocalDatabase(':memory:');for(const f of ['0001_catalog.sql','0002_ingredients.sql'])d.execute(readFileSync(new URL('../migrations/'+f,import.meta.url),'utf8'));return d;}
-function scan(entries:Entry[]):Scan{return {entries,store:{storeId:'2110',name:'Test',onlineStore:true},categories:[],requests:0,startedAt:date(),completedAt:date()};}
+function db(){const d=new LocalDatabase(':memory:');for(const f of ['0001_catalog.sql','0002_ingredients.sql'])d.execute(readFileSync(new URL('../migrations/'+f,import.meta.url),'utf8'));d.execute(catalogStorageSchema());return d;}
+function scan(entries:Entry[],offset=0):Scan{const observedAt=new Date(Date.now()+offset).toISOString();return {entries:entries.map(entry=>({...entry,observedAt})),store:{storeId:'2110',name:'Test',onlineStore:true},categories:[],requests:0,startedAt:observedAt,completedAt:observedAt};}
 function workerDb(d:LocalDatabase):D1Database{
   function prepare(sql:string){let params:Statement['params']=[];const s={sql,get params(){return params},bind(...p:NonNullable<Statement['params']>){params=p;return s;},
     async first(){return (await rows(d,sql,params))[0]??null;},async all(){return {results:await rows(d,sql,params),success:true};}};return s;}
@@ -101,7 +103,7 @@ test('cloud refresh switches discontinued IDs and newly cheaper alternatives, wi
     await publish(d,scan([eggs('A',30,20),eggs('B',40,20)]));const first=await refreshIngredientLinks(d,inv);
     assert.equal(first.requirements,3);assert.equal(first.ingredientOccurrences,112);
     await publish(d,scan([eggs('B',40,20),eggs('C',20,20)]));const second=await refreshIngredientLinks(d,inv);
-    const link=(await rows(d,'SELECT selected_code FROM ingredient_links WHERE run_id=? AND ingredient_name=?',[second.runId,'eggs']))[0];
+    const link=(await rows(d,'SELECT selected_code FROM ingredient_links_read WHERE run_id=? AND ingredient_name=?',[second.runId,'eggs']))[0];
     assert.equal(link.selected_code,'C');assert.equal((await rows(d,"SELECT * FROM ingredient_change_history WHERE ingredient_name='eggs'")).length,2);
   }finally{d.close();}
 });
@@ -111,22 +113,47 @@ test('incomplete or stale catalogue leaves the last connection version untouched
     await d.query('UPDATE snapshots SET product_count=99');await assert.rejects(refreshIngredientLinks(d,inv),/Incomplete/);
     assert.equal((await rows(d,"SELECT value FROM catalog_state WHERE key='active_ingredient_run'"))[0].value,first.runId);
     await d.query('UPDATE snapshots SET product_count=1');
-    await d.query("UPDATE catalog_entries SET data_json=json_set(data_json,'$.observedAt',?)",[new Date(Date.now()-25*3600000).toISOString()]);
+    await d.query('UPDATE catalog_snapshot_storage SET oldest_observation_at=? WHERE snapshot_id=(SELECT value FROM catalog_state WHERE key=\'active_snapshot\')',[new Date(Date.now()-25*3600000).toISOString()]);
     await assert.rejects(refreshIngredientLinks(d,inv),/stale/);
     assert.equal((await rows(d,"SELECT value FROM catalog_state WHERE key='active_ingredient_run'"))[0].value,first.runId);
+  }finally{d.close();}
+});
+test('unchanged ingredient mappings reuse intervals and hydrate prices from each pinned catalogue snapshot',async()=>{
+  const d=db();try{
+    const requirements={requirements:[{name:'a generic ingredient',occurrences:1},{name:'eggs',occurrences:5},{name:'water',occurrences:1}],
+      recipes:2,ingredientOccurrences:7,hash:'same-inventory'};
+    await publish(d,scan([eggs('A',30,20),eggs('B',40,20)]));
+    const first=await refreshIngredientLinks(d,requirements);
+    const versionRows=await rows(d,'SELECT ingredient_name,valid_from_revision,data_json FROM ingredient_link_versions ORDER BY ingredient_name');
+    const env={DB:workerDb(d),CATALOG_API_TOKEN:token};
+    const page=await(await handle(request('/ingredients?limit=1'),env)).json() as any;
+    assert.equal(page.ingredients[0].name,'a generic ingredient');
+    await publish(d,scan([eggs('A',35,20),eggs('B',40,20)],1000));
+    const second=await refreshIngredientLinks(d,requirements);
+    assert.equal(second.changedLinks,0);assert.equal(second.unchangedLinks,3);
+    assert.deepEqual(await rows(d,'SELECT ingredient_name,valid_from_revision,data_json FROM ingredient_link_versions ORDER BY ingredient_name'),versionRows);
+    const current=await(await handle(request('/ingredients/lookup',{ingredients:['eggs']}),env)).json() as any;
+    assert.equal(current.ingredients[0].selectedProduct.priceOre,3500);
+    const oldPage=await(await handle(request('/ingredients?limit=1&cursor='+encodeURIComponent(page.nextCursor)),env)).json() as any;
+    assert.equal(oldPage.runId,first.runId);assert.equal(oldPage.connectionsCurrent,false);
+    assert.equal(oldPage.ingredients[0].name,'eggs');
+    assert.equal(oldPage.ingredients[0].selectedProduct.priceOre,3000);
+    assert.deepEqual(oldPage.ingredients[0].candidates.map((p:any)=>p.priceOre),[3000,4000]);
   }finally{d.close();}
 });
 test('an interrupted connection upload cannot publish a partial version and can be retried',async()=>{
   const d=db();try{
     await publish(d,scan([eggs('A',30,20)]));const first=await refreshIngredientLinks(d,inv);
+    await publish(d,scan([eggs('A',30,20),eggs('B',10,20)]));
     const failed={query:async(sql:string,params?:Statement['params'])=>{
-      if(sql.startsWith('INSERT INTO ingredient_links'))throw new Error('Simulated upload interruption');
+      if(sql.startsWith('INSERT INTO ingredient_link_versions'))throw new Error('Simulated upload interruption');
       return d.query(sql,params);
     },batch:(statements:Statement[])=>d.batch(statements)};
     await assert.rejects(refreshIngredientLinks(failed,inv),/interruption/);
     assert.equal((await rows(d,"SELECT value FROM catalog_state WHERE key='active_ingredient_run'"))[0].value,first.runId);
     const retried=await refreshIngredientLinks(d,inv);assert.notEqual(retried.runId,first.runId);
-    assert.equal((await rows(d,'SELECT COUNT(*) AS n FROM ingredient_links WHERE run_id=?',[retried.runId]))[0].n,3);
+    assert.equal((await rows(d,'SELECT COUNT(*) AS n FROM ingredient_links_read WHERE run_id=?',[retried.runId]))[0].n,3);
+    assert.equal((await rows(d,'SELECT selected_code FROM ingredient_links_read WHERE run_id=? AND ingredient_name=?',[retried.runId,'eggs']))[0].selected_code,'B');
   }finally{d.close();}
 });
 test('ingredient API authenticates reads and keeps review writes on a separate credential',async()=>{
@@ -226,7 +253,37 @@ test('publication removes connections retained in a pre-policy snapshot',async()
     await d.query('INSERT INTO ingredient_links VALUES(?,?,?,?,?,?)',[first.runId,'bacon',1,'matched','A','{}']);
     const next=await refreshIngredientLinks(d,inv);
     assert.equal((await rows(d,'SELECT COUNT(*) AS n FROM ingredient_links WHERE run_id=?',[first.runId]))[0].n,0);
-    assert.equal((await rows(d,'SELECT COUNT(*) AS n FROM ingredient_links WHERE run_id=?',[next.runId]))[0].n,3);
+    assert.equal((await rows(d,'SELECT COUNT(*) AS n FROM ingredient_links_read WHERE run_id=?',[next.runId]))[0].n,3);
+  }finally{d.close();}
+});
+
+test('legacy ingredient runs seed chronologically as deltas with tombstones and stable run IDs',async()=>{
+  const d=db();try{
+    const addRun=async(id:string,createdAt:string,records:Array<{name:string;status:string;code:string|null;data:unknown}>)=>{
+      await d.query("INSERT INTO ingredient_runs VALUES(?,?,?,'complete',?,?,?)",[id,'snapshot',createdAt,records.length,'inventory','{}']);
+      for(const r of records)await d.query('INSERT INTO ingredient_links VALUES(?,?,?,?,?,?)',[id,r.name,1,r.status,r.code,JSON.stringify(r.data)]);
+    };
+    const egg=(code:string,status='matched')=>({name:'eggs',status,code,data:{name:'eggs',occurrences:1,status,selectedCode:code,selectedProduct:{code,priceOre:100},candidates:[{code,priceOre:100}],reason:'stable'}});
+    await addRun('legacy-run-1','2026-01-01T00:00:00.000Z',[egg('A'),{name:'bacon',status:'unavailable',code:null,data:{name:'bacon',occurrences:1,status:'unavailable',selectedCode:null,selectedProduct:null,candidates:[],reason:'missing'}}]);
+    await addRun('legacy-run-2','2026-01-02T00:00:00.000Z',[egg('B'),{name:'vanilla',status:'needs_review',code:null,data:{name:'vanilla',occurrences:1,status:'needs_review',selectedCode:null,selectedProduct:null,candidates:[],reason:'new'}}]);
+    await ensureIngredientStorage(d);
+    const broken={query:async(sql:string,params?:Statement['params'])=>{
+      if(sql.startsWith('INSERT INTO ingredient_link_versions'))throw new Error('seed interruption');
+      return d.query(sql,params);
+    },batch:(statements:Statement[])=>d.batch(statements)};
+    await assert.rejects(seedIngredientStorage(broken,'legacy-run-2'),/seed interruption/);
+    assert.equal((await rows(d,'SELECT COUNT(*) AS n FROM ingredient_link_versions'))[0].n,0);
+    assert.equal((await rows(d,'SELECT COUNT(*) AS n FROM ingredient_run_storage'))[0].n,0);
+    await seedIngredientStorage(d,'legacy-run-2');
+    const mappings=await rows(d,'SELECT run_id,revision FROM ingredient_run_storage ORDER BY revision');
+    assert.deepEqual(mappings.map(r=>[r.run_id,Number(r.revision)]),[['legacy-run-1',1],['legacy-run-2',2]]);
+    assert.deepEqual((await rows(d,'SELECT ingredient_name FROM ingredient_links_read WHERE run_id=? ORDER BY ingredient_name',['legacy-run-1'])).map(r=>r.ingredient_name),['bacon','eggs']);
+    assert.deepEqual((await rows(d,'SELECT ingredient_name FROM ingredient_links_read WHERE run_id=? ORDER BY ingredient_name',['legacy-run-2'])).map(r=>r.ingredient_name),['eggs','vanilla']);
+    assert.equal((await rows(d,'SELECT COUNT(*) AS n FROM ingredient_link_versions'))[0].n,5);
+    await seedIngredientStorage(d,'legacy-run-2');
+    assert.equal((await rows(d,'SELECT COUNT(*) AS n FROM ingredient_link_versions'))[0].n,5);
+    await addRun('legacy-run-0','2025-12-31T00:00:00.000Z',[egg('Z')]);
+    await assert.rejects(seedIngredientStorage(d,'legacy-run-0'),/chronological order/);
   }finally{d.close();}
 });
 

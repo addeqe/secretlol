@@ -40,6 +40,8 @@ jobs:
       - name: Summarize upload progress
         run: |
           node -e 'const fs=require("fs"); const r=JSON.parse(fs.readFileSync("data/last-meal-import-report.json")); fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,JSON.stringify(r,null,2)+"\n")'
+      - name: Build verified recipe search index within the free quota
+        run: npm run meal:search
       - name: Disable this workflow after the verified fifth part
         if: ${{ always() }}
         run: |

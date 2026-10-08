@@ -6,15 +6,16 @@ import {ingredientPolicy,productPolicy,DIETARY_POLICY_VERSION} from './dietary-p
 import type {PolicyClassification} from './dietary-policy.ts';
 import {catalogueIdentityHash,productIdentity} from './ingredient-assessments.ts';
 import type {Assessment} from './ingredient-assessments.ts';
+import {candidate} from './ingredient-candidate.ts';
+import type {Candidate} from './ingredient-candidate.ts';
+export {candidate} from './ingredient-candidate.ts';
+export type {Candidate} from './ingredient-candidate.ts';
 
 export type Requirement = { name: string; occurrences: number };
 import {packInfo} from './product-pack.ts';
 import type {Pack} from './product-pack.ts';
 export {packInfo} from './product-pack.ts';
 export type {Pack} from './product-pack.ts';
-export type Candidate = { code: string; name: string; brand: string | null; available: boolean;
-  comparisonPriceOre: number | null; comparisonUnit: string; priceOre: number | null;
-  priceUnit: string; pack: Pack; observedAt: string; expiresAt: string; eligible: boolean; exclusion: string | null };
 export type Decision = { action: 'approve' | 'reject'; code: string; reason: string; reviewedAt: string;
   approvedCodes?: string[]; rejectedCodes?: string[]; basis?: FoodRule['basis'] };
 export type Link = Requirement & { ingredientId: string; foodId: string | null;
@@ -74,37 +75,6 @@ export function reviewAttributeExclusion(name:string,entry:Entry):string|null {
   return null;
 }
 
-function expiry(entry: Entry) {
-  let until=Date.parse(entry.observedAt)+86400000;
-  for(const offer of entry.offers as Array<{validUntil?: number}>){
-    if(typeof offer.validUntil==='number' && offer.validUntil>Date.parse(entry.observedAt))until=Math.min(until,offer.validUntil);
-  }
-  return new Date(until).toISOString();
-}
-export function candidate(entry: Entry, basis: FoodRule['basis'], now: number): Candidate {
-  const pack=packInfo(entry); const priceUnit=entry.priceUnit.toLowerCase().replace(/\s/g,'');
-  const compareUnit=entry.comparePriceUnit.toLowerCase().replace(/^kr\//,'').replace(/\s/g,'');
-  let unitPrice: number|null=null;
-  if(entry.priceOre!==null){
-    if(priceUnit===`kr/${basis}`)unitPrice=entry.priceOre;
-    else if(/^kr\/(?:st|styck|forp|förp|fp)$/.test(priceUnit)){
-      const target=basis==='kg'?'g':basis==='l'?'ml':'piece';
-      if(pack.unit===target && pack.quantity && !pack.approximate)unitPrice=entry.priceOre/pack.quantity*(basis==='piece'?1:1000);
-      else if(entry.comparePriceOre!==null && compareUnit===(basis==='piece'?'st':basis))unitPrice=entry.comparePriceOre;
-    }
-  }
-  let exclusion: string|null=productPolicy(entry);
-  if(exclusion){} // Policy cannot be overridden by stock, price or review state.
-  else if(!entry.available)exclusion='unavailable';
-  else if(entry.priceOre===null || entry.depositOre===null || unitPrice===null)exclusion='price_or_comparison_basis_unknown';
-  else if(Date.parse(expiry(entry))<=now || Date.parse(entry.observedAt)>now+60000)exclusion='stale_price';
-  // Never turn a conditional offer into an unconditional cheap item selection.
-  else if((entry.offers as Array<Record<string,unknown>>).some(o=>o.applied===true &&
-    (Number(o.qualifyingCount)>1 || o.campaignType && o.campaignType!=='GENERAL')))exclusion='conditional_price';
-  return {code:entry.code,name:entry.name,brand:entry.brand,available:entry.available,comparisonPriceOre:unitPrice,
-    comparisonUnit:basis,priceOre:entry.priceOre,priceUnit:entry.priceUnit,pack,observedAt:entry.observedAt,
-    expiresAt:expiry(entry),eligible:exclusion===null,exclusion};
-}
 type Classified = { rule: FoodRule; uncertain: boolean; reason: string; constraints: (e:Entry)=>boolean };
 function classify(name: string): Classified|null {
   const original=normalizeText(name), clean=original.replace(prep,' ').replace(/\s+/g,' ').trim();

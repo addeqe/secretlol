@@ -1,10 +1,11 @@
 import type { Entry } from '../src/types.ts';
+import {catalogPageSql} from '../src/catalog-query.ts';
 import { ingredientRoutes } from './ingredients.ts';
 import { mealRoutes } from './meals.ts';
 type Env = { DB: D1Database; MEAL_DB?: D1Database; CATALOG_API_TOKEN: string; PRICE_MAX_AGE_HOURS?: string;
   GITHUB_REPOSITORY?: string; GITHUB_DISPATCH_TOKEN?: string; INGREDIENT_REVIEW_TOKEN?: string };
 type Snapshot = { id: string; store_id: string; store_name: string; completed_at: string;
-  started_at: string; product_count: number; report_json: string };
+  started_at: string; product_count: number; report_json: string;oldest_observation_at?:string };
 const json = (value: unknown, status = 200) => Response.json(value, { status, headers: {
   'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff'
 } });
@@ -61,18 +62,18 @@ export async function handle(request: Request, env: Env): Promise<Response> {
   if(reviewRoute&&(!env.INGREDIENT_REVIEW_TOKEN||env.INGREDIENT_REVIEW_TOKEN.length<32))return json({error:'review_not_connected'},503);
   if (!authorized(request, reviewRoute?env.INGREDIENT_REVIEW_TOKEN!:env.CATALOG_API_TOKEN)) return json({ error: 'unauthorized' }, 401);
   if(url.pathname.startsWith('/meal/'))return mealRoutes(request,env,requestJson);
-  let snapshot = await env.DB.prepare(`SELECT s.* FROM snapshots s
+  let snapshot = await env.DB.prepare(`SELECT s.*,m.oldest_observation_at FROM snapshots s LEFT JOIN catalog_snapshot_storage m ON m.snapshot_id=s.id
     WHERE s.id=(SELECT value FROM catalog_state WHERE key='active_snapshot') AND s.status='complete'`).first<Snapshot>();
   if (!snapshot) return json({ error: 'catalogue_not_ready', message: 'Run the first catalogue sync.' }, 503);
   if(url.pathname==='/ingredients'||url.pathname.startsWith('/ingredients/'))return ingredientRoutes(request,env,snapshot,requestJson);
   const ageHours = Number(env.PRICE_MAX_AGE_HOURS ?? 24);
   if (!Number.isFinite(ageHours) || ageHours <= 0 || ageHours > 24) return json({ error: 'invalid_freshness_configuration' }, 503);
   if (url.pathname === '/status' && request.method === 'GET') {
-    const latest = await env.DB.prepare(`SELECT MIN(observed_at) AS oldest, MAX(observed_at) AS newest
-      FROM catalog_entries WHERE snapshot_id=?`).bind(snapshot.id).first<{ oldest: string; newest: string }>();
+    const oldest=snapshot.oldest_observation_at??(await env.DB.prepare(`SELECT MIN(observed_at) AS oldest
+      FROM catalog_entries_read WHERE snapshot_id=?`).bind(snapshot.id).first<{oldest:string}>())?.oldest;
     return json({ store: { id: snapshot.store_id, name: snapshot.store_name }, products: snapshot.product_count,
-      snapshotId: snapshot.id, lastSuccessfulSync: snapshot.completed_at, oldestObservation: latest?.oldest,
-      fresh: !!latest?.oldest && Date.now() - Date.parse(latest.oldest) < ageHours * 3600000,
+      snapshotId: snapshot.id, lastSuccessfulSync: snapshot.completed_at, oldestObservation: oldest,
+      fresh: !!oldest && Date.now() - Date.parse(oldest) < ageHours * 3600000,
       ...JSON.parse(snapshot.report_json) });
   }
   if (url.pathname === '/catalog' && request.method === 'GET') {
@@ -89,8 +90,7 @@ export async function handle(request: Request, env: Env): Promise<Response> {
       if (!selected) return json({ error: 'snapshot_expired', message: 'Restart pagination without a cursor.' }, 409);
       snapshot = selected;
     }
-    const result = await env.DB.prepare(`SELECT json_remove(data_json, '$.raw', '$.price', '$.priceHash') AS data_json FROM catalog_entries
-      WHERE snapshot_id=? AND code>? ORDER BY code LIMIT ?`).bind(snapshot.id, after, limit + 1).all<{ data_json: string }>();
+    const result = await env.DB.prepare(catalogPageSql()).bind(snapshot.id,after,limit+1,snapshot.id,after,limit+1,limit+1).all<{code:string;data_json:string}>();
     const entries = result.results.slice(0, limit).map(row => JSON.parse(row.data_json) as Entry);
     const products = entries.map(({ raw, priceHash, ...entry }) => ({ ...entry, expiresAt: expiresAt(entry, ageHours) }));
     const last = entries.at(-1);
@@ -100,7 +100,7 @@ export async function handle(request: Request, env: Env): Promise<Response> {
   const productMatch = /^\/products\/([^/]+)$/.exec(url.pathname);
   if (productMatch && request.method === 'GET') {
     if (!validCode(productMatch[1])) return json({ error: 'invalid_code' }, 400);
-    const row = await env.DB.prepare('SELECT data_json FROM catalog_entries WHERE snapshot_id=? AND code=?')
+    const row = await env.DB.prepare('SELECT data_json FROM catalog_entries_read WHERE snapshot_id=? AND code=?')
       .bind(snapshot.id, productMatch[1]).first<{ data_json: string }>();
     if (!row) return json({ error: 'product_not_found' }, 404);
     const entry = JSON.parse(row.data_json) as Entry;
@@ -124,7 +124,7 @@ export async function handle(request: Request, env: Env): Promise<Response> {
     const codes = [...new Set(data.products.map((p: any) => p.willysCode))];
     // Keep bulk lookups small enough for the free Worker's CPU allowance.
     const result = await env.DB.prepare(`SELECT code, json_remove(data_json, '$.raw', '$.sourcePricing', '$.price') AS data_json
-      FROM catalog_entries WHERE snapshot_id=?
+      FROM catalog_entries_read WHERE snapshot_id=?
       AND code IN (SELECT value FROM json_each(?))`).bind(snapshot.id, JSON.stringify(codes)).all<{ code: string; data_json: string }>();
     const entries = new Map(result.results.map(row => [row.code, JSON.parse(row.data_json) as Entry]));
     const prices = [], unresolved = [];

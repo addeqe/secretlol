@@ -50,7 +50,10 @@ try {
     } else {
       if (!database) throw new Error('Database is not connected');
       const publication=await publish(database, scan, { allowShrink: args.includes('--allow-shrink') });
-      const metered={...publication,...(database instanceof D1DatabaseClient?{rowsWritten:database.rowsWritten}:{} )};
+      // Reuse this exact verified input in the next step rather than re-reading
+      // eleven thousand products from D1. It is private to this job's workspace.
+      writeFileSync(resolve('data/last-catalogue-scan.json'),JSON.stringify(scan));
+      const metered={...publication,...(database instanceof D1DatabaseClient?{rowsWritten:database.rowsWritten,rowsRead:database.rowsRead}:{} )};
       writeFileSync(resolve('data/last-publication-report.json'),JSON.stringify(metered,null,2));
       console.log(JSON.stringify(metered, null, 2));
     }

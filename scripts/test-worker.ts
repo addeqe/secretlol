@@ -8,6 +8,8 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { normalize } from '../src/products.ts';
 import { LocalDatabase } from '../src/database.ts';
 import { refreshIngredientLinks } from '../src/ingredient-publish.ts';
+import { catalogStorageSchema } from '../src/catalog-storage.ts';
+import { ingredientStorageSchema } from '../src/ingredient-storage.ts';
 import { mealSchema } from '../src/meal-import.ts';
 
 const folder = resolve('data/worker-test'); mkdirSync(folder, { recursive: true });
@@ -21,6 +23,8 @@ const id = randomUUID(), date = new Date().toISOString(), token = 'local-worker-
 const quote = (value: unknown) => value === null ? 'NULL' : `'${String(value).replace(/'/g, "''")}'`;
 let sql = readFileSync(new URL('../migrations/0001_catalog.sql', import.meta.url), 'utf8');
 sql += readFileSync(new URL('../migrations/0002_ingredients.sql', import.meta.url), 'utf8');
+// The smoke fixture runs the same compatibility views used by production reads.
+sql += `\n${catalogStorageSchema()};\n${ingredientStorageSchema()};\n`;
 sql += '\nDELETE FROM catalog_entries; DELETE FROM snapshots; DELETE FROM price_history; DELETE FROM catalog_state;\n';
 sql += `INSERT INTO snapshots VALUES(${[id, fixture.store.storeId, fixture.store.name, date, date, fixture.products.length, 'complete', '{}'].map(quote).join(',')});\n`;
 for (const product of fixture.products) {
@@ -33,7 +37,8 @@ const connections = new LocalDatabase(':memory:');
 connections.execute(sql);
 await refreshIngredientLinks(connections, { requirements: [{name:'milk',occurrences:10},{name:'water',occurrences:2}],
   recipes:2,ingredientOccurrences:12,hash:'runtime-test' });
-for(const table of ['ingredient_runs','ingredient_links','ingredient_change_history']){
+for(const table of ['catalog_snapshot_storage','catalog_product_versions','ingredient_runs','ingredient_links',
+  'ingredient_change_history','ingredient_link_versions','ingredient_run_storage']){
   sql += `DELETE FROM ${table};\n`;
   for(const row of connections.db.prepare(`SELECT * FROM ${table}`).all())sql += `INSERT INTO ${table} VALUES(${Object.values(row).map(quote).join(',')});\n`;
 }
@@ -91,7 +96,7 @@ try {
   assert.equal((await fetch(`${base}/ingredients/review`,{method:'POST',headers,body:JSON.stringify(review)})).status,401);
   assert.equal((await fetch(`${base}/ingredients/review`,{method:'POST',headers:{...headers,Authorization:`Bearer ${token}-review`},body:JSON.stringify(review)})).status,200);
   const mealStatus=await(await fetch(`${base}/meal/status`,{headers})).json() as any;
-  assert.equal(mealStatus.ready,true);assert.equal(mealStatus.connectionsCurrent,true);
+  assert.equal(mealStatus.ready,true,JSON.stringify(mealStatus));assert.equal(mealStatus.connectionsCurrent,true,JSON.stringify(mealStatus));
   const mealSearch=await(await fetch(`${base}/meal/recipes?diet=vegetarian`,{headers})).json() as any;assert.equal(mealSearch.recipes[0].id,1);
   const recipe=await(await fetch(`${base}/meal/recipes/1`,{headers})).json() as any;assert.equal(recipe.ingredients[0].connection.willysItemId,'TEST_MILK_ST');
   const mealQuote=await(await fetch(`${base}/meal/quote`,{method:'POST',headers,body:JSON.stringify({recipes:[{recipeId:1,servings:4}]})})).json() as any;

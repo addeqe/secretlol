@@ -5,6 +5,7 @@ import { LocalDatabase, D1DatabaseClient, rows } from '../src/database.ts';
 import { normalize, moneyOre } from '../src/products.ts';
 import { crawl } from '../src/crawl.ts';
 import { publish } from '../src/publish.ts';
+import { catalogStorageSchema, seedCatalogStorage } from '../src/catalog-storage.ts';
 import { WillysClient, inVisitWindow, validatePage } from '../src/willys.ts';
 import { cloudflare } from '../scripts/helpers.ts';
 import worker, { handle, packPrice, expiresAt } from '../worker/index.ts';
@@ -29,6 +30,7 @@ function scan(products: SourceProduct[], offset = 0): Scan {
 function database() {
   const db = new LocalDatabase(':memory:');
   db.execute(readFileSync(new URL('../migrations/0001_catalog.sql', import.meta.url), 'utf8'));
+  db.execute(catalogStorageSchema());
   return db;
 }
 function workerDb(db: LocalDatabase): D1Database {
@@ -39,6 +41,28 @@ function workerDb(db: LocalDatabase): D1Database {
       async all() { return { results: await rows(db, sql, params), success: true }; } };
     return statement;
   } } as unknown as D1Database;
+}
+function meteredD1(db: LocalDatabase) {
+  return new D1DatabaseClient({ accountId: 'a'.repeat(32), databaseId: 'b'.repeat(36), token: 'test-only',
+    fetcher: async (_url, init) => {
+      const body = JSON.parse(String(init?.body)) as { sql?: string; params?: unknown[]; batch?: Array<{ sql: string; params?: unknown[] }> };
+      const statements = body.batch ?? [{ sql: body.sql!, params: body.params }];
+      if (body.batch) db.db.exec('BEGIN IMMEDIATE');
+      try {
+        const result = [];
+        for (const statement of statements) {
+          const before = Number(db.db.prepare('SELECT total_changes() AS n').get()?.n ?? 0);
+          const resultRows = await rows(db, statement.sql, statement.params as Array<string | number | null> | undefined);
+          const after = Number(db.db.prepare('SELECT total_changes() AS n').get()?.n ?? 0);
+          result.push({ success: true, results: resultRows, meta: { rows_written: after - before, rows_read: resultRows.length, size_after: 1 } });
+        }
+        if (body.batch) db.db.exec('COMMIT');
+        return Response.json({ success: true, result });
+      } catch (error) {
+        if (body.batch) db.db.exec('ROLLBACK');
+        throw error;
+      }
+    } });
 }
 const secret = 'test-token-that-is-more-than-thirty-two-characters';
 function request(path: string, body?: unknown, token = secret) {
@@ -100,14 +124,178 @@ test('initial publication and subsequent changes create compact history', async 
     assert.equal((await rows(db, 'SELECT * FROM snapshots')).length, 2);
   } finally { db.close(); }
 });
+test('unchanged revalidation advances snapshot freshness without rewriting product versions', async () => {
+  const db = database();
+  try {
+    const products = [raw(), raw('TEST_2_ST')];
+    const first = await publish(db, scan(products));
+    const env = { DB: workerDb(db), CATALOG_API_TOKEN: secret };
+    const beforeApi = await (await handle(request('/products/TEST_1_ST'), env)).json() as any;
+    const original = (await rows(db, 'SELECT code,content_hash,valid_from FROM catalog_product_versions ORDER BY code'));
+    const historyBefore = Number((await rows(db, 'SELECT COUNT(*) AS n FROM price_history'))[0].n);
+    const second = await publish(db, scan(products, 1000));
+    const after = await rows(db, 'SELECT code,content_hash,valid_from FROM catalog_product_versions ORDER BY code');
+    assert.notEqual(second.snapshotId, first.snapshotId);
+    assert.deepEqual(after, original);
+    assert.equal((await rows(db, 'SELECT COUNT(*) AS n FROM price_history'))[0].n, historyBefore);
+    const oldRow = (await rows(db, 'SELECT observed_at,data_json FROM catalog_entries_read WHERE snapshot_id=? AND code=?', [first.snapshotId, 'TEST_1_ST']))[0];
+    const newRow = (await rows(db, 'SELECT observed_at,data_json FROM catalog_entries_read WHERE snapshot_id=? AND code=?', [second.snapshotId, 'TEST_1_ST']))[0];
+    assert.notEqual(newRow.observed_at, oldRow.observed_at);
+    assert.equal(JSON.parse(String(newRow.data_json)).priceOre, JSON.parse(String(oldRow.data_json)).priceOre);
+    assert.equal(JSON.parse(String(newRow.data_json)).available, JSON.parse(String(oldRow.data_json)).available);
+    const afterApi = await (await handle(request('/products/TEST_1_ST'), env)).json() as any;
+    const { observedAt: _beforeObserved, expiresAt: _beforeExpiry, ...beforeStable } = beforeApi;
+    const { observedAt: _afterObserved, expiresAt: _afterExpiry, ...afterStable } = afterApi;
+    assert.deepEqual(afterStable, beforeStable);
+    assert.notEqual(afterApi.observedAt, beforeApi.observedAt);
+  } finally { db.close(); }
+});
+test('unchanged D1 publication reduces mock-reported row reads and writes', async () => {
+  const db = database();
+  try {
+    const products = Array.from({ length: 40 }, (_, i) => raw(`ITEM_${String(i).padStart(3, '0')}_ST`, 10 + i));
+    const client = meteredD1(db);
+    await publish(client, scan(products));
+    const priorWrites = client.rowsWritten;
+    const priorReads = client.rowsRead;
+    const second = await publish(client, scan(products, 1000));
+    const repeatWrites = client.rowsWritten - priorWrites;
+    const repeatReads = client.rowsRead - priorReads;
+    assert.equal(second.delta?.unchanged, products.length);
+    assert.equal((await rows(db, 'SELECT COUNT(*) AS n FROM catalog_product_versions'))[0].n, products.length);
+    assert.ok(repeatWrites < products.length, `expected metadata-scale writes, got ${repeatWrites} for ${products.length} products`);
+    assert.ok(repeatReads < products.length, `expected fewer than one returned row per product, got ${repeatReads} for ${products.length} products`);
+  } finally { db.close(); }
+});
+test('price, stock, pack changes and removals create exact temporal deltas', async () => {
+  const db = database();
+  try {
+    const firstProducts = [raw(), raw('STOCK_ST'), raw('PACK_ST'), raw('REMOVE_ST')];
+    firstProducts[2].displayVolume = '500g';
+    const first = await publish(db, scan(firstProducts));
+    const changed = [raw('TEST_1_ST', 19), { ...raw('STOCK_ST'), outOfStock: true }, raw('PACK_ST'), raw('NEW_ST')];
+    changed[2].displayVolume = '750g';
+    const second = await publish(db, scan(changed, 1000));
+    assert.deepEqual(second.delta, { added: 1, updated: 3, removed: 1, unchanged: 0, priceChanges: 2 });
+    const current = await rows(db, 'SELECT code,name,price_hash FROM catalog_entries_read WHERE snapshot_id=? ORDER BY code', [second.snapshotId]);
+    const previous = await rows(db, 'SELECT code FROM catalog_entries_read WHERE snapshot_id=? ORDER BY code', [first.snapshotId]);
+    assert.deepEqual(current.map(row => row.code), ['NEW_ST', 'PACK_ST', 'STOCK_ST', 'TEST_1_ST']);
+    assert.deepEqual(previous.map(row => row.code), ['PACK_ST', 'REMOVE_ST', 'STOCK_ST', 'TEST_1_ST']);
+    const stock = JSON.parse(String((await rows(db, 'SELECT data_json FROM catalog_entries_read WHERE snapshot_id=? AND code=?', [second.snapshotId, 'STOCK_ST']))[0].data_json));
+    assert.equal(stock.available, false);
+    assert.equal((await rows(db, 'SELECT COUNT(*) AS n FROM catalog_product_versions WHERE code=?', ['REMOVE_ST']))[0].n, 1);
+    assert.equal((await rows(db, 'SELECT COUNT(*) AS n FROM price_history'))[0].n, 6);
+  } finally { db.close(); }
+});
+test('legacy catalogue snapshots migrate idempotently and keep their read shape', async () => {
+  const db = database();
+  try {
+    const legacy = scan([raw()]);
+    await db.query("INSERT INTO snapshots VALUES('legacy','2110','TEST store',?,?,1,'complete','{}')", [legacy.startedAt, legacy.completedAt]);
+    const entry = legacy.entries[0];
+    const legacyData = { ...entry, price: { priceOre: entry.priceOre, priceUnit: entry.priceUnit,
+      comparePriceOre: entry.comparePriceOre, comparePriceUnit: entry.comparePriceUnit,
+      depositOre: entry.depositOre, offers: entry.offers, sourcePricing: entry.sourcePricing } };
+    await db.query('INSERT INTO catalog_entries VALUES(?,?,?,?,?,?,?)', ['legacy', entry.code, entry.name,
+      entry.brand, entry.priceHash, entry.observedAt, JSON.stringify(legacyData)]);
+    await db.query("INSERT INTO catalog_state VALUES('active_snapshot','legacy')");
+    const before = (await rows(db, 'SELECT code,name,brand,price_hash,observed_at,data_json FROM catalog_entries_read WHERE snapshot_id=?', ['legacy']))[0];
+    const migrated = await seedCatalogStorage(db, 'legacy');
+    const after = (await rows(db, 'SELECT code,name,brand,price_hash,observed_at,data_json FROM catalog_entries_read WHERE snapshot_id=?', ['legacy']))[0];
+    assert.equal(migrated.seeded, true);
+    assert.equal(after.code, before.code); assert.equal(after.name, before.name); assert.equal(after.brand, before.brand);
+    assert.equal(after.price_hash, before.price_hash); assert.equal(after.observed_at, before.observed_at);
+    assert.deepEqual(JSON.parse(String(after.data_json)), JSON.parse(String(before.data_json)));
+    assert.equal((await seedCatalogStorage(db, 'legacy')).seeded, false);
+    assert.equal((await rows(db, 'SELECT COUNT(*) AS n FROM catalog_product_versions'))[0].n, 1);
+  } finally { db.close(); }
+});
+test('legacy snapshots seed chronologically as exact temporal deltas with pinned parity', async () => {
+  const db = database();
+  const saveLegacy = async (id: string, completedAt: string, entries: ReturnType<typeof scan>['entries']) => {
+    await db.query("INSERT INTO snapshots VALUES(?,?,?,?,?,?,'complete','{}')", [id, store.storeId, store.name,
+      completedAt, completedAt, entries.length]);
+    for (const entry of entries) {
+      const data = { ...entry, price: { priceOre: entry.priceOre, priceUnit: entry.priceUnit,
+        comparePriceOre: entry.comparePriceOre, comparePriceUnit: entry.comparePriceUnit,
+        depositOre: entry.depositOre, offers: entry.offers, sourcePricing: entry.sourcePricing } };
+      await db.query('INSERT INTO catalog_entries VALUES(?,?,?,?,?,?,?)', [id, entry.code, entry.name,
+        entry.brand, entry.priceHash, entry.observedAt, JSON.stringify(data)]);
+    }
+  };
+  const visible = async (id: string) => rows(db, `SELECT code,name,brand,price_hash,observed_at,data_json
+    FROM catalog_entries_read WHERE snapshot_id=? ORDER BY code`, [id]);
+  const normalizedRows = (result: Array<Record<string, unknown>>) => result.map(row => ({ ...row, data_json: JSON.parse(String(row.data_json)) }));
+  try {
+    const time1 = '2026-10-01T00:00:00.000Z', time2 = '2026-10-02T00:00:00.000Z';
+    const firstEntries = scan([raw('KEEP_ST', 10), raw('CHANGE_ST', 15), raw('REMOVE_ST', 20)]).entries;
+    const secondEntries = scan([raw('KEEP_ST', 10), { ...raw('CHANGE_ST', 25), outOfStock: true }, raw('ADD_ST', 30)], 86400000).entries;
+    await saveLegacy('legacy-first', time1, firstEntries);
+    await saveLegacy('legacy-second', time2, secondEntries);
+    await db.query("INSERT INTO price_history VALUES(?,?,?,?,?)", [store.storeId, 'CHANGE_ST', time1, 'sentinel', '{}']);
+    const historyBefore = await rows(db, 'SELECT * FROM price_history ORDER BY store_id,code,observed_at');
+    const physicalFirstBefore = await rows(db, 'SELECT code,name,brand,price_hash,observed_at,data_json FROM catalog_entries WHERE snapshot_id=? ORDER BY code', ['legacy-first']);
+    const physicalSecondBefore = await rows(db, 'SELECT code,name,brand,price_hash,observed_at,data_json FROM catalog_entries WHERE snapshot_id=? ORDER BY code', ['legacy-second']);
+
+    await seedCatalogStorage(db, 'legacy-first');
+    const firstAtSeed = await visible('legacy-first');
+    await seedCatalogStorage(db, 'legacy-second');
+    assert.deepEqual(await visible('legacy-first'), firstAtSeed);
+    assert.deepEqual(normalizedRows(await visible('legacy-first')), normalizedRows(physicalFirstBefore));
+    assert.deepEqual(normalizedRows(await visible('legacy-second')), normalizedRows(physicalSecondBefore));
+    assert.deepEqual(await rows(db, 'SELECT * FROM price_history ORDER BY store_id,code,observed_at'), historyBefore);
+
+    const versions = JSON.parse(JSON.stringify(await rows(db, `SELECT code,valid_from,valid_to FROM catalog_product_versions
+      WHERE store_id=? ORDER BY code,valid_from`, [store.storeId])));
+    assert.deepEqual(versions, [
+      { code: 'ADD_ST', valid_from: 2, valid_to: null },
+      { code: 'CHANGE_ST', valid_from: 1, valid_to: 2 },
+      { code: 'CHANGE_ST', valid_from: 2, valid_to: null },
+      { code: 'KEEP_ST', valid_from: 1, valid_to: null },
+      { code: 'REMOVE_ST', valid_from: 1, valid_to: 2 }
+    ]);
+    assert.deepEqual((await rows(db, 'SELECT code FROM catalog_entries_read WHERE snapshot_id=? ORDER BY code', ['legacy-first'])).map(row => row.code),
+      ['CHANGE_ST', 'KEEP_ST', 'REMOVE_ST']);
+    assert.deepEqual((await rows(db, 'SELECT code FROM catalog_entries_read WHERE snapshot_id=? ORDER BY code', ['legacy-second'])).map(row => row.code),
+      ['ADD_ST', 'CHANGE_ST', 'KEEP_ST']);
+
+    const versionCount = Number((await rows(db, 'SELECT COUNT(*) AS n FROM catalog_product_versions'))[0].n);
+    assert.equal((await seedCatalogStorage(db, 'legacy-second')).seeded, false);
+    assert.equal(Number((await rows(db, 'SELECT COUNT(*) AS n FROM catalog_product_versions'))[0].n), versionCount);
+
+    const olderEntries = scan([raw('KEEP_ST', 10)], -86400000).entries;
+    await saveLegacy('legacy-older', '2026-09-30T00:00:00.000Z', olderEntries);
+    await assert.rejects(seedCatalogStorage(db, 'legacy-older'), /chronological order/);
+    assert.equal((await rows(db, 'SELECT COUNT(*) AS n FROM catalog_snapshot_storage WHERE snapshot_id=?', ['legacy-older']))[0].n, 0);
+    assert.equal(Number((await rows(db, 'SELECT COUNT(*) AS n FROM catalog_product_versions'))[0].n), versionCount);
+  } finally { db.close(); }
+});
 test('failed upload leaves the previous catalogue active', async () => {
   const db = database();
   try {
     const first = await publish(db, scan([raw()]));
-    const failing: Database = { query: async (sql, params) => { if (sql.startsWith('INSERT INTO catalog_entries')) throw new Error('upload interrupted'); return db.query(sql, params); },
+    const failing: Database = { query: async (sql, params) => { if (sql.startsWith('INSERT INTO catalog_product_versions')) throw new Error('upload interrupted'); return db.query(sql, params); },
       batch: statements => db.batch(statements) };
     await assert.rejects(publish(failing, scan([raw('TEST_1_ST', 30)], 1000)), /interrupted/);
     assert.equal((await rows(db, "SELECT value FROM catalog_state WHERE key='active_snapshot'"))[0].value, first.snapshotId);
+  } finally { db.close(); }
+});
+test('failed interval closure and pointer batch rolls back to the previous as-of catalogue', async () => {
+  const db = database();
+  try {
+    const first = await publish(db, scan([raw(), raw('TEST_2_ST')]));
+    const before = await rows(db, 'SELECT code,valid_from,valid_to FROM catalog_product_versions ORDER BY code');
+    const failing: Database = { query: (sql, params) => db.query(sql, params),
+      batch: statements => db.batch([...statements, { sql: 'UPDATE table_that_does_not_exist SET x=1' }]) };
+    await assert.rejects(publish(failing, scan([raw('TEST_1_ST', 30), raw('TEST_2_ST')], 1000)), /table_that_does_not_exist/);
+    assert.equal((await rows(db, "SELECT value FROM catalog_state WHERE key='active_snapshot'"))[0].value, first.snapshotId);
+    assert.deepEqual(await rows(db, 'SELECT code,valid_from,valid_to FROM catalog_product_versions WHERE valid_from=1 ORDER BY code'), before);
+    assert.equal((await rows(db, "SELECT COUNT(*) AS n FROM snapshots WHERE status='staging'"))[0].n, 1);
+    assert.deepEqual((await rows(db, 'SELECT code FROM catalog_entries_read WHERE snapshot_id=? ORDER BY code', [first.snapshotId])).map(row => row.code), ['TEST_1_ST', 'TEST_2_ST']);
+    const retried = await publish(db, scan([raw('TEST_1_ST', 30), raw('TEST_2_ST')], 2000));
+    assert.equal((await rows(db, "SELECT COUNT(*) AS n FROM snapshots WHERE status='staging'"))[0].n, 0);
+    assert.equal((await rows(db, 'SELECT COUNT(*) AS n FROM catalog_product_versions WHERE valid_from=2'))[0].n, 1);
+    assert.equal((await rows(db, "SELECT value FROM catalog_state WHERE key='active_snapshot'"))[0].value, retried.snapshotId);
   } finally { db.close(); }
 });
 test('suspicious shrink and another store cannot replace the catalogue', async () => {

@@ -57,11 +57,16 @@ jobs:
         if: ${{ inputs.connection_check }}
         run: |
           node --input-type=module -e 'import {D1DatabaseClient} from "./src/database.ts"; await new D1DatabaseClient().query("SELECT value FROM catalog_state LIMIT 1"); console.log("D1 connection passed; no retailer requests made.")'
+      - name: Build verified recipe search index within the free quota
+        if: ${{ success() && !inputs.connection_check }}
+        env:
+          MAX_D1_SIZE_MB: '480'
+        run: npm run meal:search
       - name: Summarize completed scan
         if: ${{ success() && !inputs.connection_check && !inputs.connections_only }}
         run: |
-          node -e 'const fs=require("fs"); const r=JSON.parse(fs.readFileSync("data/last-scan-report.json")); fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Store ${r.store.storeId}: ${r.products} online products; ${r.requests} requests; completed ${r.completedAt}.\n`)'
+          node -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync("data/last-scan-report.json")); const p=JSON.parse(fs.readFileSync("data/last-publication-report.json")); fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Store ${s.store.storeId}: ${s.products} online products; ${s.requests} requests; completed ${s.completedAt}. Catalogue changes: ${JSON.stringify(p.delta)}. D1: ${p.rowsRead} reads, ${p.rowsWritten} writes.\n`)'
       - name: Summarize ingredient connections
         if: ${{ success() && !inputs.connection_check }}
         run: |
-          node -e 'const fs=require("fs"); const r=JSON.parse(fs.readFileSync("data/last-ingredient-report.json")); fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Ingredients: ${r.requirements} names; ${r.ingredientOccurrences} occurrences tracked; ${(100*r.matchedFraction).toFixed(2)}% connected. Outcomes: ${JSON.stringify(r.occurrencesByStatus)}.\n`)'
+          node -e 'const fs=require("fs"); const r=JSON.parse(fs.readFileSync("data/last-ingredient-report.json")); fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Ingredients: ${r.requirements} names; ${r.ingredientOccurrences} occurrences tracked; ${(100*r.matchedFraction).toFixed(2)}% connected. Outcomes: ${JSON.stringify(r.occurrencesByStatus)}. Changed connections: ${r.changedLinks}; reused: ${r.unchangedLinks}. Combined D1: ${r.rowsRead} reads, ${r.rowsWritten} writes (connections: ${r.ingredientRowsWritten}).\n`)'

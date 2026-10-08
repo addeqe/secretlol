@@ -3,10 +3,15 @@ import { resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { loadEnv, required } from '../src/config.ts';
 import { connectedConfig, saveEnv, wrangler } from './helpers.ts';
+import {D1DatabaseClient} from '../src/database.ts';
+import {ensureCatalogStorage} from '../src/catalog-storage.ts';
+import {ensureIngredientStorage} from '../src/ingredient-storage.ts';
 loadEnv();
 export async function deploy() {
   const apiToken = required('CATALOG_API_TOKEN');
   if (apiToken.length < 32) throw new Error('CATALOG_API_TOKEN must contain at least 32 characters.');
+  const database=new D1DatabaseClient();
+  await ensureCatalogStorage(database);await ensureIngredientStorage(database);
   connectedConfig();
   const output = wrangler(['deploy'], { capture: true });
   // Deployment logs do not contain our secrets; secret uploads use stdin below.
