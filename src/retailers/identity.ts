@@ -143,3 +143,7 @@ export function validateConnections(connections: ReviewedConnection[], products:
     }
   }
 }
+
+// V8 defers expensive policy-regex compilation until first use. Do this small,
+// pure initialization within the Worker's startup budget, before serving requests.
+reviewedProductPolicy({ name: 'water', brand: null, categories: [], ingredientsText: 'water' }, 'water');
