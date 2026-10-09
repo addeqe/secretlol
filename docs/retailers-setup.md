@@ -1,6 +1,12 @@
 # Coop-drift och lokal ICA-förberedelse
 
-Dokumentet beskriver Coop som den enda kedjan som kan sättas upp för daglig molnuppdatering. ICA förblir avstängt och uppskjutet: serverns produkt-/prisanrop blockeras. Coop-adaptern stöder verifierade kategori-/produktuppslag och butikens onlinepriser för pickup, och full pagination har verifierats den 9 oktober: 14 368 unika produkter från Stora Coop Västberga (256600). Åtkomst från GitHub Actions ska verifieras innan dagsjobbet aktiveras. Molnpublicering kräver därför först kvotkontroll och en installerad, granskad Coop-katalog.
+Dokumentet beskriver Coop som den nya anslutna kedjan bredvid Willys. ICA förblir avstängt och uppskjutet eftersom serverns produkt-/prisanrop blockeras. Den 9 oktober slutfördes Coop-startscannen, granskningen, D1-installationen och publiceringen. Coop D1-bindingen och Worker är driftsatta. GitHub Actions-källprovet [37904883640](https://github.com/addeqe/secretlol/actions/runs/37904883640) och det normala dagsjobbet [37908550399](https://github.com/addeqe/secretlol/actions/runs/37908550399) passerade.
+
+## Aktuell status: 9 oktober 2026
+
+Startscannen av Stora Coop Västberga (256600, pickup) omfattar 14 368 unika produkter, 748 lövkategorier och 1 121 sidor. Granskad publicering omfattar 881 ingrediensnamn: 564 matchade, 311 behöver granskning och 6 behöver inte köpas. Det ger 7 230 recept med fullständig Coop-koppling och 82 876 kopplade förekomster av 96 082. Coop spårar 376 godkända produkt-ID:n; olösta ingredienser förblir olösta.
+
+Alla fem receptimportdelar är klara och `/meal/status` visar `ready: true`. Det tillfälliga `meal-upload`-workflowet är avstängt. Daglig Coop-refresh är aktiverad. ICA har ingen godkänd automatisk produkt-/priskälla.
 
 ## Börja offline
 
@@ -42,9 +48,9 @@ CLI:n laddar inte `.env` automatiskt. Anslutningsvärden kan laddas med Nodes `-
 
 ## Daglig Coop-uppdatering
 
-`.github/workflows/retailers.yml` kör endast Coop, dagligen 04:50 UTC och vid manuell start. ICA ingår inte i workflowet. Aktivera genom att sätta GitHub Actions-variabeln `COOP_DAILY_ENABLED` till `true` efter att Coop-databasen och Worker är installerade och Coop-priserna har verifierats från Actions-miljön. Workflowet använder `npm ci` för låsta beroenden.
+`.github/workflows/retailers.yml` är aktiverat för enbart Coop, dagligen 04:50 UTC och vid manuell start; ICA ingår inte. Körningen den 9 oktober verifierade alla 376 godkända huvud- och reserv-ID:n med noll produktändringar, 4 D1-skrivningar och 4 034 läsningar. Databasen var 1 679 360 byte. Workflowet använder `npm ci` för låsta beroenden.
 
-Före varje uppdatering frågar `scripts/check-retailer-quota.ts` Cloudflares D1-analys efter dagens UTC-skrivningar i hela kontot. Körningen går vidare endast när uppmätt användning + `COOP_WRITE_ALLOWANCE` + `COOP_SHARED_WRITE_RESERVE` högst är `COOP_ACCOUNT_WRITE_LIMIT`. Standard är 10 000 reserverade skrivningar och 90 000 som gräns. Saknad/ogiltig kvotdata stoppar körningen; otillräckligt utrymme skjuter upp den. Sätt `COOP_WRITE_ALLOWANCE` till en konservativ gräns för den här katalogen. Samma allowance begränsar publiceringen. Willys och receptimport delar fortfarande kvoten; kvotkontrollen reserverar inget åt andra jobb utöver det uttryckliga reservvärdet.
+Före varje uppdatering frågar `scripts/check-retailer-quota.ts` Cloudflares D1-analys efter dagens UTC-skrivningar i hela kontot. Körningen går vidare endast när uppmätt användning + `COOP_WRITE_ALLOWANCE` + `COOP_SHARED_WRITE_RESERVE` högst är `COOP_ACCOUNT_WRITE_LIMIT`. Nuvarande värden är 7 000 för Coop, 10 000 reserverade skrivningar och 90 000 som kontogräns. Coop-budgeten täcker den konservativa uppskattningen 6 413 även om alla 376 produkter, priser och 881 kopplingsstatusar ändras. Saknad/ogiltig kvotdata stoppar körningen; otillräckligt utrymme skjuter upp den. Samma allowance begränsar publiceringen. Willys och receptimport delar fortfarande kvoten; kvotkontrollen reserverar inget åt andra jobb utöver det uttryckliga reservvärdet.
 
 Actions-inställningar för Coop-jobbet:
 
@@ -67,12 +73,12 @@ Det behövs ingen betald AI-runtime eller AI-API för workflowet eller kundens v
 
 | Kedja | Verifierat | Inte verifierat och därför avstängt |
 |---|---|---|
-| Coop | Pickup-butiksförslag via postnummer, kategoriträd, kategoribrowse utan sökord, produkt-/batchuppslag och onlinepriser med uttryckligt butiks-ID. | Leverans-/slot-scope, generell ID-portabilitet och drift från GitHub/Worker. Full startscan har verifierats för referensbutik 256600 den 9 oktober. Generiskt EAN-pris används aldrig som lokalt butikspris. |
+| Coop | Pickup-butiksförslag via postnummer, kategoriträd, kategoribrowse utan sökord, produkt-/batchuppslag och onlinepriser med uttryckligt butiks-ID. Full startscan, GitHub Actions-källprov (37904883640), D1/Worker-driftsättning, molnpublicering och daglig refresh (37908550399) har verifierats. | Leverans-/slot-scope och generell ID-portabilitet är inte verifierade. Generiskt EAN-pris används aldrig som lokalt butikspris. |
 | ICA | Butiksförslag via postnummer och automatiskt butiksspecifikt kategoriträd. En anonym webbläsarsession visar lokal kategori, produkt och priser. | Produkt-/prisanrop från backend eller Actions: serveranrop får CloudFront 403, medan den vanliga webbappen använder `AwsWafIntegration.fetch`. Full pagination och ID-portabilitet återstår också. |
 
 Kapabilitetskommandot visar adapterkonfiguration, inte bevis för att alla upstream-kontroller lyckas just nu. ICA:s fungerande anonyma webbläsarsida är inte bevis för automatisk källa. Aktuell checklistestatus finns i [Coop/ICA-arbetslistan](coop-ica-todo.md), och det godkända arbetssättet i [planen](coop-ica-plan.md).
 
-## API som förberetts
+## API i drift
 
 API:t ligger på samma auktoriserade Worker som matplaneraren. De nya anropen är:
 
@@ -82,7 +88,7 @@ API:t ligger på samma auktoriserade Worker som matplaneraren. De nya anropen ä
 - `GET /retailers/openapi.json` beskriver tillägget.
 - `POST /meal/quote` kan ta `retailer: "coop"` eller `"ica"`, upp till tre menyfinalister, och `priceMode: "reference"` eller `"local"`.
 
-API-exempel: rangordna två menyfinalister efter referensdata. Recept-ID:n är exempel; använd faktiska ID:n från den aktuella molnreleasen. Detta är ett **utkast till API-anrop**, inte ett påstående att Coop/ICA-katalogen redan är ansluten eller att offertrutinen kan slutföras idag.
+API-exempel: rangordna två menyfinalister efter referensdata. Coop-katalogen är ansluten och offertflödet har verifierats; recept-ID:n och budgeten nedan är exempel. ICA är inte anslutet.
 
 ```http
 POST /meal/quote
@@ -119,12 +125,12 @@ Svar kan innehålla `priceMode`, `priceSource` (`reference-webshop` eller `local
 
 Förbrukningskostnaden summeras utan avrundning över alla produkter och avrundas sedan till hela ören. Enskilda raders visningsbelopp avrundas separat, så deras summa kan skilja något från totalsumman. Inköpskostnaden summerar produktens faktiska paket-/viktkostnad inklusive pant. Mängder under `1e-9` gram, milliliter eller styck, eller mängder som inte kan summeras med bibehållen numerisk precision, markeras som olösta i stället för att få nollkostnad.
 
-## Coop innan dagsjobbet aktiveras
+## Driftkontroller
 
-1. Verifiera Coop pickup-pris och anrop från GitHub Actions-miljön. Lokala serverprov garanterar inte att samma källa fungerar där.
-2. Kontrollera dagens delade Cloudflare-kvot innan molnläsning eller skrivning. Workflowets preflight gör samma kontroll inför varje schemalagd refresh.
-3. Importera och granska Coop-produkter, skapa endast Coop-databasen/migrationen och driftsätt bindings innan `COOP_DAILY_ENABLED=true`.
-4. Mät små offerter, aktualitet, CPU, cache, externa anrop och läs-/skrivförbrukning. Utöka först när källan och den delade kvoten motiverar det.
+1. **Klart:** verifiera Coop pickup-källa från GitHub Actions i körning [37904883640](https://github.com/addeqe/secretlol/actions/runs/37904883640).
+2. Före framtida molnskrivning ska den aktuella delade Cloudflare-kvoten fortfarande kontrolleras. Workflowets preflight gör samma kontroll inför refresh.
+3. **Klart:** installera Coop D1, driftsätt Worker-bindingen och publicera de granskade kopplingarna och spårade produkterna.
+4. **Klart:** normal uppdatering från GitHub Actions använder bara 376 granskade ID:n och har verifierad deltaförbrukning. Kundoffertens CPU följs separat, särskilt för större menyförslag.
 5. ICA:s produkt-/priskälla återstår separat; detta Coop-jobb aktiverar aldrig ICA.
 
 Det vanliga kund-API:t och dagsjobbet behöver ingen betald AI-runtime. Fulla scans är en engångs-/återhämtningsåtgärd, inte en rutin. Upstream-begränsningar kan göra att bara en del av planen kan genomföras nästa arbetsdag.

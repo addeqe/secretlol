@@ -2,7 +2,7 @@
 
 Basadress: https://willys-catalog.abowlena.workers.dev
 
-Alla data för den godkända receptsamlingen finns i Cloudflare D1 efter den femte importetappen. Appen behöver inte läsa någon lokal SQLite-fil. Receptinnehåll och klassificeringar ligger i databasen `mealplanner-recipes`; produkter, prisversioner och aktuella ingredienskopplingar ligger i `willys-catalog`. En och samma API-tjänst läser båda.
+Alla data för den godkända receptsamlingen finns i Cloudflare D1 efter den femte importetappen. Appen behöver inte läsa någon lokal SQLite-fil. Receptinnehåll och klassificeringar ligger i databasen `mealplanner-recipes`; Willys-produkter och kopplingar ligger i `willys-catalog`, och Coop-produkter och granskade kopplingar ligger i den separata `coop-catalog`. En och samma API-tjänst läser dessa databaser.
 
 ## Autentisering
 
@@ -14,9 +14,11 @@ Samlingen innehåller 15 244 recept, 96 082 ingrediensförekomster, 881 unika in
 
 ## Uppladdningen
 
+**Slutförd 9 oktober 2026:** alla fem delar är verifierade, `/meal/status` visar `ready: true`, och det tillfälliga importjobbet är avstängt. De återstående delarna 2–5 slutfördes samma dag efter uttryckligt godkännande och kvotkontroll före varje del; de använde totalt 12 616 skrivningar.
+
 `Import meal database over five days` är en tillfällig GitHub Actions-workflow. Den laddar högst en etapp per UTC-dag från den låsta GitHub-releasen `meal-data-2026-10-07`. Första etappen innehåller 3 049 recept och hela ingredienslistan/filterdefinitionerna; etapp 2–4 innehåller vardera 3 049 recept och etapp 5 innehåller 3 048.
 
-Kontrollsummor verifieras före varje import. Redan importerade dokument skrivs inte om vid omkörning. Vid avbrott återupptas samma etapp; nästa etapp kan inte avslutas samma UTC-dag. Alla slutliga recept-, ingrediens- och recensionsantal kontrolleras innan databasen görs tillgänglig för sökning. Workflowen stänger av sig själv efter slutförd import. Recept-API:t svarar `503 recipe_import_in_progress` under importen; `/meal/status` visar framstegen.
+Kontrollsummor verifieras före varje import. Redan importerade dokument skrivs inte om vid omkörning. Vid avbrott återupptas samma etapp; standardjobbet avslutar högst en etapp per UTC-dag. Ett uttryckligt operatörsläge kan slutföra flera efter separat kvotkontroll; det aktiveras inte av dagsjobbet. Alla slutliga recept-, ingrediens- och recensionsantal kontrolleras innan databasen görs tillgänglig för sökning. Workflowen stänger av sig själv efter slutförd import. Recept-API:t svarar `503 recipe_import_in_progress` under importen; `/meal/status` visar framstegen.
 
 Cloudflares gräns 100 000 skrivna rader/dag gäller hela kontot, inklusive index och raderingar. Den kompakta dokumentlagringen kräver ungefär 4 200 skrivningar första etappen och 3 100 för senare etapper. Uppladdningen kontrollerar kontots rapporterade dagsförbrukning, reserverar marginal och delar en kö med kataloguppdateringen. Andra program på samma konto kan påverka tillgänglig kvot. Vid kvotbrist eller ett GitHub/Cloudflare-avbrott förskjuts en etapp tills en lyckad körning kan ske; dag 5 avser fem lyckade dagsetapper.
 
@@ -144,3 +146,41 @@ Statiska recept/filter ändras inte av prisuppdateringar. En senare ändring av 
 `401` betyder fel/saknad token, `400` felaktiga parametrar, `404` saknat recept/produkt, `409` ändrade sidfilter/version, `413` för stor JSON-kropp, `422` okänd portionsgrund och `503` import/uppdatering som pågår eller en otillgänglig databas. Läs alltid fältet `error`. Försök igen med väntetid vid tillfälliga `503`, och kontrollera `/meal/status` vid import.
 
 Cloudflare Free har även läs- och anropsgränser. Detta är ett kostnadsfritt startupplägg inom dessa gränser, inte obegränsad trafik. Referenser: [D1-priser och dagskvoter](https://developers.cloudflare.com/d1/platform/pricing/), [D1-gränser](https://developers.cloudflare.com/d1/platform/limits/), [GitHub stora filer/releases](https://docs.github.com/en/repositories/working-with-files/managing-large-files/about-large-files-on-github).
+
+## Coop: kedjeval och lokala pickuppriser
+
+Coop är anslutet på samma basadress och med samma API-token. Willys förblir standard om `retailer` utelämnas. ICA är uppskjutet och har ingen ansluten katalogdatabas.
+
+Den första granskade Coop-versionen omfattar 881 ingrediensnamn: 564 matchade, 6 som inte behöver köpas och 311 som fortfarande behöver granskning. Det ger 7 230 recept med godkänd koppling för alla ingredienser, motsvarande 86,3 procent av ingrediensförekomsterna i hela receptsamlingen. Fullständig koppling innebär inte automatiskt beräkningsbar mängd; reglerna om okänd mängd, densitet och styckvikt gäller även här.
+
+| Anrop | Användning |
+|---|---|
+| `GET /retailers` | Kedjornas installation, referensbutik, senaste verifierade körning och kopplingsstatus |
+| `GET /stores?retailer=coop&postalCode=12630` | Föreslå pickupplatser och deras prisbutik |
+| `GET /meal/recipes?retailer=coop&limit=20` | Sök endast recept med aktuella, godkända Coop-kopplingar |
+| `GET /meal/recipes/310?retailer=coop` | Recept med aktuella Coop-kopplingar |
+| `GET /meal/ingredients?retailer=coop&limit=50` | Ingrediensfilter och Coop-kopplingsstatus |
+| `GET /retailers/coop/products?ids=PRODUCT_ID,PRODUCT_ID` | Upp till 100 lagrade, spårade Coop-produkter med EAN, paket, pris och aktualitet |
+| `GET /retailers/openapi.json` | Det utökade API-kontraktet, inklusive kedjeofferten |
+
+Offert för referensbutiken Stora Coop Västberga (256600):
+
+```json
+{
+  "retailer": "coop",
+  "priceMode": "reference",
+  "recipes": [{"recipeId": 310, "servings": 12}]
+}
+```
+
+Skicka till `POST /meal/quote`. För lokal offert: sätt `priceMode` till `local` och lägg till `storeId` från butikssvaret samt `channel: "pickup"`. `id` och `pricingStoreId` anger butiken vars onlinepriser gäller; `pickupPointId` anger den fysiska hämtningsplatsen. En utlämningsbox kan tillhöra en annan prisbutik. Priset gäller onlinebeställning med hämtning, inte ett verifierat hyllpris i den fysiska butiken. Leveransavgifter och medlems-/mängdvillkor ingår inte.
+
+Coop-offertens resultat ligger i `basket`, med bland annat `complete`, `optimizationComplete`, `purchaseCostOre`, `consumedCostOre`, `lines` och `unresolved`. Ett `finalists`-anrop får jämföra upp till tre menyer med deras lokala priser och returnerar `selectedMenuId`. Det använder högst 32 recept per finalist, 200 olika ingrediensnamn, 500 ingrediensrader per finalist och 400 produkt-ID:n totalt. Kontrollera alltid både fullständighet och optimeringsstatus. En bruten koppling eller okänd mängd blir en uttrycklig olöst kostnad.
+
+Startscannen sparar 14 368 produkter i en [GitHub-release](https://github.com/addeqe/secretlol/releases/tag/coop-reference-2026-10-09). Coop D1 behöver bara de 376 granskade huvud- och reservprodukterna. Dagsjobbet kontrollerar dessa ID:n och skriver produkt-/prishistorik enbart vid ändringar. Två bekräftade, välformade svar utan ett tidigare känt ID markerar det som osäkert och utan aktuellt pris; en godkänd reserv kan då väljas. Ändrad produktidentitet kräver ny granskning. Ingen okänd ersättningsprodukt godkänns automatiskt.
+
+Den dagliga Coop-uppdateringen är aktiverad för 04:50 UTC. [Verifierad körning den 9 oktober](https://github.com/addeqe/secretlol/actions/runs/37908550399) kontrollerade 376 ID:n med noll produktändringar och använde 4 skrivningar samt 4 034 läsningar. Förbrukningen ökar när produkter eller priser ändras. Kvotkontrollen reserverar 7 000 skrivningar för Coop och 10 000 för gemensamma jobb inom en kontogräns på 90 000.
+
+Referensobservationer gäller högst 24 timmar, kortare om det valda erbjudandet slutar tidigare. Lokal priscache gäller högst 30 minuter och förlänger aldrig källans giltighet. Vanliga kundofferter skriver inte i D1 och behöver varken lokala filer eller en betald AI-tjänst.
+
+Kapacitetsgräns: de verifierade menyofferterna fungerar i molnet, men vissa första anrop har fortfarande överstigit Workers Free-gränsen på 10 ms CPU. Plattformen medger enstaka överskridanden; stora menyer och hög trafik är inte fullt lasttestade. Kontrollera HTTP-status och innehållstyp innan svaret läses som JSON, eftersom plattformsfel kan vara HTML. Se [mätningen](retailer-verification.md) och [Cloudflares gränser](https://developers.cloudflare.com/workers/platform/limits/).

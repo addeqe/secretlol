@@ -1,6 +1,6 @@
 # Coop och ICA: arbetslista
 
-Senast avstämd: 9 oktober 2026. Planen är godkänd. Den här listan skiljer mellan det som finns förberett lokalt och det som återstår innan butikskällor, molndatabaser eller daglig drift kan användas. En bock betyder att arbetet finns i repot; den betyder inte att en livekälla eller molninstallation har verifierats.
+Senast avstämd: 9 oktober 2026. Coop-referenskatalogen är insamlad, granskade kopplingar publicerade och Coop D1/Worker driftsatta. Daglig Coop-uppdatering är aktiverad och verifierad. ICA är uppskjutet.
 
 ## Förberett lokalt
 
@@ -13,9 +13,9 @@ Senast avstämd: 9 oktober 2026. Planen är godkänd. Den här listan skiljer me
 - [x] CLI för syntetisk offline-demo, kapabilitetsvisning, lokal scanartefakt, offlinegranskningsbatcher och uttryckligt gated publicering/uppdatering.
 - [x] Insamling har begränsad anropstakt, återförsök vid tillfälliga fel, tids-/anropsbudget, checkpoints för återupptagning och komprimering med kontrollsumma. Detta har testats med sparade eller syntetiska svar.
 - [x] Databasinitiering har ett lokalt planläge som standard. Molnvägen kräver separata explicita flaggor och miljövariabel; inga Cloudflare-anrop görs av standardvägen.
-- [x] Dagligt workflow finns för enbart Coop och är avstängt tills `COOP_DAILY_ENABLED=true`. Det delar GitHub Actions-skrivkonkurrensgrupp med övrig katalog/import. ICA är uppskjutet.
+- [x] Dagligt Coop-workflow är aktiverat med `COOP_DAILY_ENABLED=true`, en skrivbudget på 7 000 och delad kvotkontroll. Det delar GitHub Actions-skrivkonkurrensgrupp med övrig katalog/import. ICA ingår inte.
 - [x] Ingen betald AI-runtime eller AI-API behövs i vanlig kunddrift eller daglig uppdatering. Luna-granskning av kopplingar är ett separat manuellt arbetssteg.
-- [x] Det sparade, komprimerade releaseunderlaget har verifierats lokalt mot manifestets kontrollsummor och ingredienshash: 15 244 recept, 96 082 ingrediensrader och 881 unika ingrediensnamn. Datasetet överensstämmer med den sparade molnstatusen; den aktiva molnversionen ska fortfarande kontrolleras före publicering.
+- [x] Det sparade, komprimerade releaseunderlaget har verifierats mot manifestets kontrollsummor och ingredienshash: 15 244 recept, 96 082 ingrediensförekomster och 881 unika ingrediensnamn. Alla fem receptdelar är importerade; `/meal/status` visar `ready: true`. Det tillfälliga meal-upload-workflowet är avstängt.
 
 ## Livekällor: verifierat respektive avstängt
 
@@ -23,33 +23,35 @@ Senast avstämd: 9 oktober 2026. Planen är godkänd. Den här listan skiljer me
 - [x] Coop: den riktiga kategori-/browse-endpointen utan sökord, offset-pagination samt produkt-/batchuppslag med butiksspecifika onlinepriser har verifierats genom avgränsade serverprov. Prisadaptern stöder hämtning utan leveranstid. Medlems- och mängderbjudanden väljs inte som allmänt pris.
 - [x] ICA: postnummeruppslag och butiksspecifikt kategoriträd fungerar automatiskt. En anonym webbläsarsession visar butiksspecifik kategori, produkt och priser.
 - [x] Coop: full startscan av Stora Coop Västberga, butik 256600, pickup: 14 368 unika produkter, 748 lövkategorier, 1 121 sidor. Alla kategoriantal stämmer; 1 294 upprepningar mellan kategorier har slagits ihop. Kategoriträd och källartefakter är sparade med kontrollsummor. Butiken är dokumenterat en Stora Coop; störst i Sverige har inte verifierats.
-- [ ] Coop: verifiera källa från GitHub Actions och Worker innan full drift.
+- [x] Coop: GitHub Actions-källprovet passerade i [körning 37904883640](https://github.com/addeqe/secretlol/actions/runs/37904883640). Coop D1-bindingen är driftsatt och granskad publicering är genomförd.
 - [ ] ICA: automatisk produkt-/prishämtning från backend eller GitHub Actions återstår. Exakta första­parts­anrop från server får CloudFront 403, medan webbappen använder `AwsWafIntegration.fetch`. ICA:s produkt-/prisstöd är avstängt. Se [källunderlaget](upstream-ica.md) och [browseralternativet](ica-browser-bridge.md).
-- [ ] För båda: verifiera identifierares portabilitet mellan butiker, prisvillkor, färskhet samt åtkomst från den tänkta körmiljön innan full insamling.
+- [x] Coop: normal uppdatering passerade i [körning 37908550399](https://github.com/addeqe/secretlol/actions/runs/37908550399): 376 kontrollerade ID:n, noll ändrade produkter, 4 skrivningar och 4 034 läsningar. Schemat är 04:50 UTC varje dag.
+- [x] Optimera kalla statusanrop, produktuppslag och upprepade policykontroller. Verifiera referens-/lokalofferter efter driftsättning. Upprepade molnprov ligger under 10 ms CPU; enstaka första anrop ligger högre. Se [mätning och begränsning](retailer-verification.md).
+- [ ] Lastprova maximala menyer och många kalla instanser på Workers Free. Samtliga anrop under CPU-gränsen är ännu inte verifierade; ingen betald plan har aktiverats.
+- [ ] För båda: verifiera identifierares portabilitet mellan butiker och prisvillkor utöver de redan provade butiksscopena. Ett kontrollerat ID mellan två butiker bevisar inte generell portabilitet.
 
 ## Återstår innan användning
 
-- [x] Avgränsade källkontroller och uppföljning med Luna 6 är dokumenterade. Coop har automatisk kategori-/produkt-/prishämtning och sparade testsvar. ICA:s automatisk kategoriåtkomst är löst; produktvägen är ännu blockerad från servern. Den 9 oktober har Coops fulla startscan körts, aktuell molninventering lästs och Coop-databasen skapats efter kvotkontroll.
+- [x] Avgränsade källkontroller och uppföljning med Luna 6 är dokumenterade. Coop har verifierad kategori-/produkt-/prishämtning, GitHub Actions-källprov, publicerad katalog och Worker-binding. ICA:s automatik för kategoriåtkomst fungerar; produktvägen är fortfarande blockerad från servern. Den 9 oktober genomfördes Coops fulla startscan och molnpublicering efter kvotkontroll.
 - [x] Utred alternativa officiella ICA-källor efter CAPTCHA-resultatet och förbered [åtkomstplan och oskickad förfrågan](ica-data-access.md). Ingen dokumenterad gratis komplett prisfeed hittades; produktmasterdata och erbjudanden uppfyller inte kravet.
 - [ ] Få ICA eller en behörig butik att bekräfta en godkänd produkt-/priskälla, kostnad och tillåten molndrift. Verifiera sedan det faktiska formatet och åtkomst för både referensbutik och kundens lokala butik. Fortsätt inte med berörd full scan om enumeration och prishämtning saknas.
 - [x] Kontrollera återställd delad kvot: 33 439 skrivningar uppmätta före installationen den 9 oktober. Coop-import, Willys och receptimporten måste fortfarande rymmas tillsammans.
 - [x] Välj stor Coop-referensbutik och genomför budgeterad full scan med kontroller av antal och dubbletter. ICA ligger utanför dagens arbete.
-- [ ] Läs den aktuella molninventeringen med 881 unika ingrediensnamn och 15 244 recept. Skapa kandidatbatcher och låt Luna 6 granska/importera kopplingar; validera policy, känsliga beslut, reserver och täckning.
+- [x] Läs molninventeringen med 881 unika ingrediensnamn och 15 244 recept. Kandidatgranskning och publicering är klara: 564 matchade, 311 behöver granskning och 6 behöver inte köpas. Kopplingarna täcker 7 230 recept och 82 876 av 96 082 ingrediensförekomster. Coop spårar 376 godkända produkt-ID:n; olösta ingredienser förblir olösta.
 - [x] Skapa separat Coop D1-databas och kör migration. Ingen ICA-databas har skapats.
-- [ ] Driftsätt Coop-binding och publicera granskade kopplingar efter förnyad kvotkontroll.
-- [x] Typkontroll passerar, hela testsuiten passerar **197/197** och Worker-provet med separata lokala databaser passerar. Även befintliga Willys-anrop ingår. Se [verifieringen](retailer-verification.md).
+- [x] Driftsätt Coop-binding och publicera granskade kopplingar efter kvotkontroll. D1 och Worker är aktiva.
+- [x] Typkontroll passerar, hela testsuiten passerar **210/210** och Worker-provet med separata lokala databaser passerar. Även befintliga Willys-anrop ingår. Se [verifieringen](retailer-verification.md).
 - [x] Det avgränsade ICA-browserprovet har körts med vanlig Chromium/Playwright efter användarens godkännande. Butikssidan öppnades, men produktkontrollen stoppades av CAPTCHA. Ingen CAPTCHA löstes och inga ytterligare liveförsök gjordes därefter. ICA:s automatiska prishämtning är fortfarande avstängd. Syntax och spärren för standardkörning passerar. Se [provet](ica-browser-probe.md).
-- [ ] Granska faktiska små offerter, färskhet, reads/writes, cache och misslyckade/partiella källsvar. Inget fullständigt scan- eller molnjobb räknas som säkert genomförbart enbart för att koden finns.
-- [ ] Efter källa, kvot, kopplingar och verifiering: driftsätt och aktivera det dagliga workflowet när arbetet återupptas. Det finns ingen garanti att alla steg kan köras direkt i morgon; luckor i källorna måste först lösas.
+- [x] Verifiera referens- och lokalofferter med Coop-priser, inklusive två menyfinalister. För Västberga och Daglivs gav samma gräddprodukt 2 550 respektive 2 755 öre. Aktualitet, cache och offertstatus har regressionstester.
+- [x] Kalla receptanrop använder den atomärt publicerade kopplingsstatusen och läser bara begärda kopplingar och produkter. Ändrad version eller policy stänger för gamla sammanfattningar; tidsgränser räknas om.
 
 ### Dagens godkända molnarbete
 
-Användaren har den 9 oktober godkänt Coop-scan, molninstallation och fortsatt driftsättning. Användaren har också godkänt att resterande receptdelar slutförs samma dag om gratiskvoten räcker. Receptimporten kontrollerar kontokvoten före varje del och behåller säkerhetsmarginal. Standardjobbet importerar fortsatt högst en del per dag. ICA:s produktkälla och dagliga drift förblir avstängda.
+Användaren har den 9 oktober godkänt Coop-scan, molninstallation och driftsättning samt att resterande receptdelar slutförs om gratiskvoten räcker. Alla fem receptdelar importerades med kvotkontroll och säkerhetsmarginal; `/meal/status` visar `ready: true`, och det tillfälliga meal-upload-workflowet är avstängt. Coop-katalogen och granskade kopplingar är publicerade. Det normala Coop-dagsjobbet är aktiverat och har passerat. ICA:s produktkälla och dagliga drift förblir avstängda.
 
 ## Nästa arbetsdag: stopp-/fortsättningsordning
 
-1. Verifiera källorna först. Om Coop browse/pris eller ICA automatisk butikssession fortfarande inte fungerar, dokumentera luckan och stoppa berörd scan/import.
-2. Kontrollera kvotåterställning, kontoanvändning och delad läs-/skrivbudget före molnläsning eller skrivning.
-3. Kör endast verifierade, budgeterade källkontroller; välj och dokumentera referensbutiker före full scan.
-4. Skanna, granska kandidater, importera och skapa DB-bindings/migrationer i små steg med rapportering.
-5. Verifiera API- och dagsjobbsbeteende med små fall, inklusive kall/varm cache, CPU och externa anropsgränser på gratisnivån. Driftsätt och aktivera först när källorna fungerar och budgeten räcker.
+1. Coop-dagsjobbet kontrollerar endast de granskade ID:na; en ny full scan kräver ett separat underhållsbeslut.
+2. Före framtida molnskrivning: kontrollera aktuell kontokvot och delad läs-/skrivbudget.
+3. Fortsätt endast med avgränsade, verifierade Coop-källkontroller. ICA-produkt/pris saknar fortfarande godkänd automatisk källa och är utanför arbetet.
+4. Följ kund-API:ts CPU och korgbeteende vid större menyförslag. Ett litet lyckat prov bevisar inte obegränsad kapacitet.
