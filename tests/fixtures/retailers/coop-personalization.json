@@ -1,0 +1,128 @@
+{
+  "categoryPage": {
+    "results": {
+      "count": 1931,
+      "items": [
+        {
+          "id": "7311311020599",
+          "type": "Product",
+          "ean": "7311311020599",
+          "name": "Tortilla Medium 8-pack",
+          "manufacturerName": "Santa Maria",
+          "packageSize": 320,
+          "packageSizeUnit": "Gram",
+          "salesUnit": "Styck",
+          "salesPriceData": { "b2cPrice": 14.95, "b2bPrice": 14.1 },
+          "piecePriceData": { "b2cPrice": 14.95, "b2bPrice": 14.1 },
+          "depositData": { "b2cPrice": 0, "b2bPrice": 0 },
+          "comparativePriceUnit": { "unit": "kg", "text": "kr/kg" },
+          "availableOnline": true,
+          "navCategories": [
+            { "code": "21330", "name": "Skafferi", "superCategories": [] }
+          ]
+        }
+      ]
+    }
+  },
+  "byId": {
+    "results": {
+      "count": 5,
+      "items": [
+        {
+          "id": "7311070337297",
+          "type": "Product",
+          "ean": "7311070337297",
+          "name": "Hönö Skärgårdskaka",
+          "packageSize": 18,
+          "packageSizeUnit": "Styck",
+          "salesUnit": "Styck",
+          "salesPriceData": { "b2cPrice": 32.95, "b2bPrice": 31.08 },
+          "piecePriceData": { "b2cPrice": 32.95, "b2bPrice": 31.08 },
+          "promotionPriceData": { "b2cPrice": 25, "b2bPrice": 23.58 },
+          "depositData": { "b2cPrice": 0, "b2bPrice": 0 },
+          "onlinePromotions": [
+            {
+              "priceData": { "b2cPrice": 25, "b2bPrice": 23.58 },
+              "piecePriceData": { "b2cPrice": 25, "b2bPrice": 23.58 },
+              "medMeraRequired": false,
+              "startDate": "2026-10-04T22:00:00Z",
+              "endDate": "2026-10-11T22:00:00Z",
+              "type": "FIXED_PRICE"
+            }
+          ],
+          "availableOnline": true
+        },
+        {
+          "id": "7310865561121",
+          "type": "Product",
+          "ean": "7310865561121",
+          "name": "Smör Osaltat",
+          "packageSize": 500,
+          "packageSizeUnit": "Gram",
+          "salesUnit": "Styck",
+          "salesPriceData": { "b2cPrice": 59.5, "b2bPrice": 56.13 },
+          "piecePriceData": { "b2cPrice": 59.5, "b2bPrice": 56.13 },
+          "depositData": { "b2cPrice": 0, "b2bPrice": 0 },
+          "onlinePromotions": [
+            {
+              "priceData": { "b2cPrice": 45, "b2bPrice": 42.45 },
+              "medMeraRequired": true,
+              "startDate": "2026-10-04T22:00:00Z",
+              "endDate": "2026-10-18T22:00:00Z",
+              "type": "MULTI_BUY_FIXED_PRICE"
+            }
+          ],
+          "availableOnline": true
+        },
+        {
+          "id": "7300156587121",
+          "type": "Product",
+          "ean": "7300156587121",
+          "name": "Havredryck Till Kaffe",
+          "packageSize": 1000,
+          "packageSizeInformation": "1000 MLT",
+          "packageSizeUnit": "Milliliter",
+          "salesUnit": "Styck",
+          "salesPriceData": { "b2cPrice": 15.95, "b2bPrice": 15.05 },
+          "piecePriceData": { "b2cPrice": 15.95, "b2bPrice": 15.05 },
+          "comparativePriceUnit": { "unit": "liter", "text": "kr/lit" },
+          "depositData": { "b2cPrice": 0, "b2bPrice": 0 },
+          "availableOnline": true
+        },
+        {
+          "id": "2317401100009",
+          "type": "Product",
+          "ean": "2317401100009",
+          "name": "Banan Styck",
+          "packageSize": 180,
+          "packageSizeInformation": "180 gram ungefärlig vikt",
+          "packageSizeUnit": "gram ungefärlig vikt",
+          "salesUnit": "Vikt",
+          "pieceWeight": 0.18,
+          "displayWeightPrice": true,
+          "salesPriceData": { "b2cPrice": 21.9, "b2bPrice": 20.66 },
+          "piecePriceData": { "b2cPrice": 3.94, "b2bPrice": 3.72 },
+          "comparativePriceData": { "b2cPrice": 21.9, "b2bPrice": 20.66 },
+          "comparativePriceUnit": { "unit": "kg", "text": "kr/kg" },
+          "depositData": { "b2cPrice": 0, "b2bPrice": 0 },
+          "availableOnline": true
+        },
+        {
+          "id": "5449000259172",
+          "type": "Product",
+          "ean": "5449000259172",
+          "name": "Coca-Cola 10-pack",
+          "packageSize": 3300,
+          "packageSizeInformation": "10x330ml",
+          "packageSizeUnit": "Milliliter",
+          "salesUnit": "Styck",
+          "salesPriceData": { "b2cPrice": 73.77, "b2bPrice": 69.59 },
+          "piecePriceData": { "b2cPrice": 73.77, "b2bPrice": 69.59 },
+          "comparativePriceUnit": { "unit": "liter", "text": "kr/lit" },
+          "depositData": { "b2cPrice": 10, "b2bPrice": 9.43 },
+          "availableOnline": true
+        }
+      ]
+    }
+  }
+}

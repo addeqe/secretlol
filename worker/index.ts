@@ -2,8 +2,9 @@ import type { Entry } from '../src/types.ts';
 import {catalogPageSql} from '../src/catalog-query.ts';
 import { ingredientRoutes } from './ingredients.ts';
 import { mealRoutes } from './meals.ts';
+import { retailerRoutes, type RetailEnv } from './retailers.ts';
 type Env = { DB: D1Database; MEAL_DB?: D1Database; CATALOG_API_TOKEN: string; PRICE_MAX_AGE_HOURS?: string;
-  GITHUB_REPOSITORY?: string; GITHUB_DISPATCH_TOKEN?: string; INGREDIENT_REVIEW_TOKEN?: string };
+  GITHUB_REPOSITORY?: string; GITHUB_DISPATCH_TOKEN?: string; INGREDIENT_REVIEW_TOKEN?: string } & RetailEnv;
 type Snapshot = { id: string; store_id: string; store_name: string; completed_at: string;
   started_at: string; product_count: number; report_json: string;oldest_observation_at?:string };
 const json = (value: unknown, status = 200) => Response.json(value, { status, headers: {
@@ -62,6 +63,7 @@ export async function handle(request: Request, env: Env): Promise<Response> {
   if(reviewRoute&&(!env.INGREDIENT_REVIEW_TOKEN||env.INGREDIENT_REVIEW_TOKEN.length<32))return json({error:'review_not_connected'},503);
   if (!authorized(request, reviewRoute?env.INGREDIENT_REVIEW_TOKEN!:env.CATALOG_API_TOKEN)) return json({ error: 'unauthorized' }, 401);
   if(url.pathname.startsWith('/meal/'))return mealRoutes(request,env,requestJson);
+  if(url.pathname==='/retailers'||url.pathname==='/retailers/openapi.json'||url.pathname==='/stores'||/^\/retailers\/(coop|ica)\/products$/.test(url.pathname))return retailerRoutes(request,env);
   let snapshot = await env.DB.prepare(`SELECT s.*,m.oldest_observation_at FROM snapshots s LEFT JOIN catalog_snapshot_storage m ON m.snapshot_id=s.id
     WHERE s.id=(SELECT value FROM catalog_state WHERE key='active_snapshot') AND s.status='complete'`).first<Snapshot>();
   if (!snapshot) return json({ error: 'catalogue_not_ready', message: 'Run the first catalogue sync.' }, 503);

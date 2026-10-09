@@ -1,0 +1,17 @@
+{
+  "data": {
+    "code": "7310865001234",
+    "ean": "7310865001234",
+    "name": "Havregryn",
+    "manufacturer": "Xtra",
+    "packageSize": "600g",
+    "listOfIngredients": "Havregryn",
+    "foodAnnex": "",
+    "price": { "value": 30.95, "currencyIso": "SEK" },
+    "priceUnit": "kr/kg",
+    "stock": { "stockLevel": 0, "outOfStock": true },
+    "potentialPromotions": [
+      { "qualifyingCount": 2, "startDate": "2026-10-01T00:00:00Z", "endDate": "2026-10-31T23:59:59Z", "memberOnly": true }
+    ]
+  }
+}

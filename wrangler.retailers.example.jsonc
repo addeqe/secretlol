@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "willys-catalog",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-05-15",
+  "workers_dev": true,
+  "triggers": { "crons": ["17 4 * * *"] },
+  "vars": {
+    "PRICE_MAX_AGE_HOURS": "24",
+    "RETAILERS_LIVE_ENABLED": "false"
+  },
+  "d1_databases": [
+    { "binding": "DB", "database_name": "willys-catalog", "database_id": "00000000-0000-0000-0000-000000000000", "migrations_dir": "migrations" },
+    { "binding": "MEAL_DB", "database_name": "mealplanner-recipes", "database_id": "00000000-0000-0000-0000-000000000001", "migrations_dir": "meal-migrations" },
+    { "binding": "COOP_DB", "database_name": "coop-catalog", "database_id": "00000000-0000-0000-0000-000000000002", "migrations_dir": "retail-migrations" },
+    { "binding": "ICA_DB", "database_name": "ica-catalog", "database_id": "00000000-0000-0000-0000-000000000003", "migrations_dir": "retail-migrations" }
+  ]
+}

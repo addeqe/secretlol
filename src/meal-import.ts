@@ -54,12 +54,12 @@ export async function prepareCommon(database:Database,m:MealManifest,content:str
   await database.query("INSERT OR IGNORE INTO meal_meta VALUES('uploaded_recipe_count',(SELECT COUNT(*) FROM meal_recipes WHERE dataset_id=?))",[m.datasetId]);
   await loadCloudRequirements(database);
 }
-export async function nextImportPart(database:Database,m:MealManifest,today=new Date().toISOString().slice(0,10)){
+export async function nextImportPart(database:Database,m:MealManifest,today=new Date().toISOString().slice(0,10),options:{allowSameDay?:boolean}={}){
   validateManifest(m);
   const progress=await rows(database,'SELECT * FROM meal_import_progress WHERE dataset_id=? ORDER BY part',[m.datasetId]);
   if(progress.some((p,i)=>Number(p.part)!==i+1||p.content_hash!==m.parts[i].sha256))throw new Error('Import progress differs from pinned release');
   if(progress.length===5)return {complete:true,part:null};
-  if(progress.at(-1)&&String(progress.at(-1)!.completed_at).slice(0,10)>=today)return {complete:false,part:null,waitingForNextDay:true};
+  if(!options.allowSameDay&&progress.at(-1)&&String(progress.at(-1)!.completed_at).slice(0,10)>=today)return {complete:false,part:null,waitingForNextDay:true};
   return {complete:false,part:m.parts[progress.length]};
 }
 export async function uploadPart(database:Database,m:MealManifest,part:MealManifest['parts'][number],records:MealRecord[],completedAt?:string){

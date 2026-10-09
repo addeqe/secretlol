@@ -24,7 +24,10 @@
     "deploy": "node scripts/deploy.ts",
     "db:init": "node scripts/init-db.ts",
     "meal:upload": "node scripts/upload-meal-data.ts",
-    "meal:search": "node scripts/maintain-meal-search.ts"
+    "meal:search": "node scripts/maintain-meal-search.ts",
+    "retailers": "node scripts/retailers.ts",
+    "retailers:demo": "node scripts/retailers.ts demo",
+    "retailers:init": "node scripts/init-retailers.ts"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "4.20260515.1",

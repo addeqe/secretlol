@@ -1,0 +1,33 @@
+{
+  "nodes": [
+    {
+      "code": "16534",
+      "name": "Frukt & grönsaker",
+      "url": "/varor/frukt-gronsaker",
+      "children": [
+        {
+          "code": "fruit",
+          "name": "Frukt",
+          "url": "/varor/frukt-gronsaker/frukt",
+          "children": []
+        },
+        {
+          "code": "vegetables",
+          "name": "Grönsaker",
+          "url": "/varor/frukt-gronsaker/gronsaker",
+          "children": []
+        }
+      ]
+    },
+    {
+      "children": [],
+      "code": "0002",
+      "url": "/varor/"
+    },
+    {
+      "children": [],
+      "code": "0001",
+      "url": "/varor/"
+    }
+  ]
+}

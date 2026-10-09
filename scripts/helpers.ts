@@ -53,13 +53,42 @@ export async function cloudflare(path: string, method = 'GET', body?: unknown, a
   if (!data.success) throw new Error('Cloudflare could not complete the setup operation.');
   return data.result;
 }
-export function connectedConfig() {
-  const original = JSON.parse(readFileSync(resolve('wrangler.jsonc'), 'utf8'));
-  original.account_id = required('CLOUDFLARE_ACCOUNT_ID');
-  original.d1_databases[0].database_id = required('CLOUDFLARE_DATABASE_ID');
-  if(original.d1_databases[1]) original.d1_databases[1].database_id=required('MEAL_DATABASE_ID');
-  if (process.env.GITHUB_REPOSITORY) original.vars.GITHUB_REPOSITORY = process.env.GITHUB_REPOSITORY;
-  writeFileSync(resolve('wrangler.connected.json'), JSON.stringify(original, null, 2));
+export function connectedConfig(env: NodeJS.ProcessEnv = process.env, configPath = resolve('wrangler.jsonc'), outputPath = resolve('wrangler.connected.json')) {
+  const value = (key: string) => {
+    const result = env[key]?.trim();
+    if (!result) throw new Error(`Missing ${key}. Run npm run connect or add it to .env / GitHub settings.`);
+    return result;
+  };
+  const databaseId = (key: string) => {
+    const id = value(key);
+    if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id)) throw new Error(`Invalid ${key}`);
+    return id;
+  };
+  const original = JSON.parse(readFileSync(configPath, 'utf8'));
+  original.account_id = value('CLOUDFLARE_ACCOUNT_ID');
+  original.d1_databases[0].database_id = value('CLOUDFLARE_DATABASE_ID');
+  if (original.d1_databases[1]) original.d1_databases[1].database_id = value('MEAL_DATABASE_ID');
+  const optionalDatabases = [
+    { key: 'COOP_DATABASE_ID', binding: 'COOP_DB', database_name: 'coop-catalog' },
+    { key: 'ICA_DATABASE_ID', binding: 'ICA_DB', database_name: 'ica-catalog' },
+  ];
+  for (const database of optionalDatabases) {
+    const id = env[database.key]?.trim();
+    if (!id) continue;
+    const database_id = databaseId(database.key);
+    const configured = original.d1_databases.find((entry: { binding?: string }) => entry.binding === database.binding);
+    if (configured) {
+      configured.database_name = database.database_name;
+      configured.database_id = database_id;
+      configured.migrations_dir = 'retail-migrations';
+    } else original.d1_databases.push({ binding: database.binding, database_name: database.database_name, database_id, migrations_dir: 'retail-migrations' });
+  }
+  if (env.GITHUB_REPOSITORY) original.vars.GITHUB_REPOSITORY = env.GITHUB_REPOSITORY;
+  if (env.COOP_DATABASE_ID || env.ICA_DATABASE_ID) {
+    original.vars.RETAILERS_LIVE_ENABLED = env.RETAILERS_LIVE_ENABLED === 'true' ? 'true' : 'false';
+    if (env.COOP_PUBLIC_SUBSCRIPTION_KEY) original.vars.COOP_PUBLIC_SUBSCRIPTION_KEY = env.COOP_PUBLIC_SUBSCRIPTION_KEY;
+  }
+  writeFileSync(outputPath, JSON.stringify(original, null, 2));
 }
 export function wrangler(args: string[], options: { input?: string; capture?: boolean } = {}) {
   return command(process.execPath, [resolve('node_modules/wrangler/bin/wrangler.js'), ...args, '--config', 'wrangler.connected.json'], options);

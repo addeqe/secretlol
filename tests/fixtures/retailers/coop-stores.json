@@ -1,0 +1,24 @@
+{
+  "locationText": "11455",
+  "pagination": { "currentPage": 0, "pageSize": 20, "totalPages": 9, "totalResults": 176 },
+  "stores": [
+    {
+      "storeId": "035000",
+      "displayName": "Coop Daglivs",
+      "address": {
+        "formattedAddress": "Sankt Eriksgatan 34-38, Stockholm, 11234",
+        "line1": "Sankt Eriksgatan 34-38",
+        "postalCode": "11234",
+        "town": "Stockholm"
+      },
+      "pickupDeliveryModes": [{ "code": "pickup_from_lockers" }],
+      "url": "/butiker-erbjudanden/coop-daglivs"
+    },
+    {
+      "storeId": "000000",
+      "displayName": "Unsupported outlet",
+      "address": { "postalCode": "11455", "town": "Stockholm" },
+      "pickupDeliveryModes": []
+    }
+  ]
+}

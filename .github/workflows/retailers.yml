@@ -1,0 +1,92 @@
+name: Refresh Coop catalogue
+on:
+  workflow_dispatch:
+    inputs:
+      source_check:
+        description: Check Coop categories and pickup pricing from GitHub Actions without Cloudflare or D1 access
+        required: false
+        type: boolean
+        default: false
+  schedule:
+    - cron: '50 4 * * *'
+permissions:
+  contents: read
+# Willys, recipe imports and retailer refreshes share the same D1 write quota.
+concurrency:
+  group: willys-cloud-writes
+  cancel-in-progress: false
+jobs:
+  source_check:
+    if: ${{ inputs.source_check == true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      COOP_PUBLIC_SUBSCRIPTION_KEY: ${{ secrets.COOP_PUBLIC_SUBSCRIPTION_KEY }}
+      COOP_REFERENCE_STORE_ID: ${{ vars.COOP_REFERENCE_STORE_ID }}
+      COOP_REFERENCE_CHANNEL: ${{ vars.COOP_REFERENCE_CHANNEL || 'pickup' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Verify bounded Coop pickup source from Actions
+        run: node scripts/verify-coop-runtime.ts --allow-live
+  quota:
+    if: ${{ vars.COOP_DAILY_ENABLED == 'true' && inputs.source_check != true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      allowed: ${{ steps.check.outputs.allowed }}
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      COOP_WRITE_ALLOWANCE: ${{ vars.COOP_WRITE_ALLOWANCE }}
+      COOP_SHARED_WRITE_RESERVE: ${{ vars.COOP_SHARED_WRITE_RESERVE || '10000' }}
+      COOP_ACCOUNT_WRITE_LIMIT: ${{ vars.COOP_ACCOUNT_WRITE_LIMIT || '90000' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Verify shared account write quota
+        id: check
+        run: node scripts/check-retailer-quota.ts
+  refresh:
+    needs: quota
+    if: ${{ vars.COOP_DAILY_ENABLED == 'true' && inputs.source_check != true && needs.quota.outputs.allowed == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      COOP_DATABASE_ID: ${{ vars.COOP_DATABASE_ID }}
+      COOP_PUBLIC_SUBSCRIPTION_KEY: ${{ secrets.COOP_PUBLIC_SUBSCRIPTION_KEY }}
+      RETAILERS_CLOUD_ENABLED: 'true'
+      RETAILER: coop
+      REFERENCE_STORE: ${{ vars.COOP_REFERENCE_STORE_ID }}
+      REFERENCE_CHANNEL: ${{ vars.COOP_REFERENCE_CHANNEL || 'pickup' }}
+      WRITE_ALLOWANCE: ${{ vars.COOP_WRITE_ALLOWANCE }}
+      MAX_D1_SIZE_MB: '400'
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Verify Coop refresh settings
+        run: |
+          node --input-type=module -e 'for (const k of ["CLOUDFLARE_ACCOUNT_ID","CLOUDFLARE_API_TOKEN","COOP_DATABASE_ID","COOP_PUBLIC_SUBSCRIPTION_KEY","REFERENCE_STORE","WRITE_ALLOWANCE"]) if (!process.env[k]) throw new Error("Missing required Coop refresh setting: "+k); if (process.env.REFERENCE_CHANNEL !== "pickup") throw new Error("Only verified Coop pickup pricing is enabled");'
+      - name: Refresh approved Coop products and reserves
+        run: npm run retailers -- refresh --retailer coop --store-id "$REFERENCE_STORE" --channel "$REFERENCE_CHANNEL" --allow-live --remote --confirm-cloudflare --write-budget "$WRITE_ALLOWANCE"
+      - name: Report Coop catalogue changes and review queue
+        if: ${{ success() }}
+        run: |
+          node --input-type=module -e 'import fs from "node:fs";const r=JSON.parse(fs.readFileSync("data/coop-last-refresh.json"));fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,`Coop: ${r.checked} checked, ${r.changed} changed, ${r.priceChanges} price changes; connection status ${JSON.stringify(r.connectionsByStatus)}. D1 ${r.rowsRead} reads, ${r.rowsWritten} writes.\n`)'

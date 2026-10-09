@@ -36,6 +36,16 @@ const egg=(code:string,ore:number)=>normalize({code,name:'Ägg 6p Frigående Med
 async function link(s:ReturnType<typeof setup>,items:Entry[]=[egg('EGG_A',1800)]){const scan:Scan={entries:items,store:{storeId:'2110',name:'Test',onlineStore:true},categories:[],requests:0,startedAt:new Date().toISOString(),completedAt:new Date().toISOString()};await publish(s.catalog,scan);await refreshIngredientLinks(s.catalog,await loadCloudRequirements(s.meal));}
 const req=(path:string,body?:any,secret=readToken)=>new Request('https://example.test'+path,{method:body?'POST':'GET',headers:{Authorization:`Bearer ${secret}`,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
 const env=(s:ReturnType<typeof setup>)=>({DB:binding(s.catalog),MEAL_DB:binding(s.meal),CATALOG_API_TOKEN:readToken});
+test('explicit same-day completion bypasses only the daily wait and preserves progress integrity',async()=>{
+ const s=setup();try{
+  await prepareCommon(s.meal,s.m,JSON.stringify(s.common));
+  await uploadPart(s.meal,s.m,s.m.parts[0],[s.records[0]],'2026-10-09T08:00:00Z');
+  assert.equal((await nextImportPart(s.meal,s.m,'2026-10-09')).waitingForNextDay,true);
+  assert.equal((await nextImportPart(s.meal,s.m,'2026-10-09',{allowSameDay:true})).part?.day,2);
+  await s.meal.query("UPDATE meal_import_progress SET content_hash='corrupt'");
+  await assert.rejects(nextImportPart(s.meal,s.m,'2026-10-09',{allowSameDay:true}),/progress differs/);
+ }finally{s.meal.close();s.catalog.close();}
+});
 test('release checksums reject corrupt compressed assets',()=>{const b=gzipSync('hello'),a={file:'x',bytes:b.length,uncompressedBytes:5,sha256:digest(b)};assert.equal(unpackAsset(b,a),'hello');assert.throws(()=>unpackAsset(gzipSync('world'),a),/checksum/);});
 test('import exposes no partial recipes and only one completed part per UTC day',async()=>{const s=setup();try{await prepareCommon(s.meal,s.m,JSON.stringify(s.common));const inventory=await loadCloudRequirements(s.meal);assert.equal(inventory.requirements.length,2);assert.equal(inventory.inventorySource,'cloud-recipe-database');assert.equal((await handle(req('/meal/recipes'),env(s))).status,503);await uploadPart(s.meal,s.m,s.m.parts[0],[s.records[0]],'2026-10-07T10:00:00Z');assert.equal((await nextImportPart(s.meal,s.m,'2026-10-07')).waitingForNextDay,true);assert.equal((await nextImportPart(s.meal,s.m,'2026-10-08')).part?.day,2);assert.equal((await(await handle(req('/meal/status'),env(s))).json() as any).uploadedRecipes,1);}finally{s.meal.close();s.catalog.close();}});
 test('status count follows atomic insert changes even when a part is interrupted',async()=>{const s=setup();try{await prepareCommon(s.meal,s.m,JSON.stringify(s.common));const prior=s.meal.batch.bind(s.meal);let interrupt=true;s.meal.batch=async statements=>{const result=await prior(statements);if(interrupt){interrupt=false;throw new Error('simulated interruption');}return result;};await assert.rejects(uploadPart(s.meal,s.m,s.m.parts[0],[s.records[0]]),/simulated interruption/);s.meal.batch=prior;const status=await(await handle(req('/meal/status'),env(s))).json() as any;assert.equal(status.uploadedRecipes,1);assert.equal(status.completedParts,0);}finally{s.meal.close();s.catalog.close();}});

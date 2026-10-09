@@ -1,0 +1,42 @@
+{
+  "combinedHomePickupDelivery": null,
+  "forHomeDelivery": [
+    {
+      "id": "01253",
+      "name": "ICA Nära Banér",
+      "city": "Stockholm",
+      "street": "Banérgatan 3",
+      "zipCode": "11456",
+      "deliveryMethods": ["HOME_DELIVERY"],
+      "accountId": "1004414",
+      "retailerSiteId": "27306",
+      "slug": "ica-nara-baner-id_01253"
+    },
+    {
+      "id": "01256",
+      "name": "ICA Karlaplan",
+      "city": "Stockholm",
+      "street": "Karlaplan 10",
+      "zipCode": "11520",
+      "deliveryMethods": ["HOME_DELIVERY", "PICKUP"],
+      "accountId": "1003714",
+      "retailerSiteId": "27306",
+      "slug": "ica-karlaplan-id_01256"
+    }
+  ],
+  "forPickupDelivery": [
+    {
+      "id": "01256",
+      "name": "ICA Karlaplan",
+      "city": "Stockholm",
+      "street": "Karlaplan 10",
+      "zipCode": "11520",
+      "deliveryMethods": ["HOME_DELIVERY", "PICKUP"],
+      "accountId": "1003714",
+      "retailerSiteId": "27306",
+      "slug": "ica-karlaplan-id_01256"
+    }
+  ],
+  "validZipCode": true,
+  "zipCode": "11455"
+}

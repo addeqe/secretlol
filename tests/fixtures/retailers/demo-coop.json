@@ -1,0 +1,179 @@
+{
+  "sourceMarker": "SYNTHETIC OFFLINE FIXTURE ONLY; prices are not retailer data",
+  "generatedAt": "2026-10-08T00:00:00.000Z",
+  "retailer": "coop",
+  "scope": {
+    "storeId": "fixture-store",
+    "channel": "pickup"
+  },
+  "datasetId": "demo-fixture-only-2026-10-08",
+  "inventoryHash": "d31a34e9075b42d0df54c23ccf67be122c663de7c51898af410acda8e5ad4e60",
+  "observations": [
+    {
+      "retailer": "coop",
+      "scope": {
+        "storeId": "fixture-store",
+        "channel": "pickup"
+      },
+      "product": {
+        "id": "demo-rice-1kg",
+        "ean": null,
+        "name": "Demo Long Grain Rice 1 kg",
+        "brand": "Demo Pantry",
+        "categories": [
+          "Rice"
+        ],
+        "pack": {
+          "quantity": 1000,
+          "unit": "g",
+          "approximate": false
+        },
+        "ingredientsText": "Rice"
+      },
+      "price": {
+        "amountOre": 1990,
+        "basis": "pack",
+        "depositOre": 0,
+        "memberOnly": false,
+        "minimumQuantity": null,
+        "validFrom": null,
+        "validUntil": null
+      },
+      "availability": "available",
+      "checkedAt": "2026-10-08T00:00:00.000Z",
+      "expiresAt": "2026-10-09T00:00:00.000Z",
+      "storeScopeVerified": true
+    },
+    {
+      "retailer": "coop",
+      "scope": {
+        "storeId": "fixture-store",
+        "channel": "pickup"
+      },
+      "product": {
+        "id": "demo-onion-each",
+        "ean": null,
+        "name": "Demo Yellow Onion",
+        "brand": "Demo Produce",
+        "categories": [
+          "Vegetables"
+        ],
+        "pack": {
+          "quantity": 1,
+          "unit": "piece",
+          "approximate": false
+        },
+        "ingredientsText": null
+      },
+      "price": {
+        "amountOre": 590,
+        "basis": "pack",
+        "depositOre": 0,
+        "memberOnly": false,
+        "minimumQuantity": null,
+        "validFrom": null,
+        "validUntil": null
+      },
+      "availability": "available",
+      "checkedAt": "2026-10-08T00:00:00.000Z",
+      "expiresAt": "2026-10-09T00:00:00.000Z",
+      "storeScopeVerified": true
+    },
+    {
+      "retailer": "coop",
+      "scope": {
+        "storeId": "fixture-store",
+        "channel": "pickup"
+      },
+      "product": {
+        "id": "demo-eggs-6",
+        "ean": null,
+        "name": "Demo Eggs 6 pack",
+        "brand": "Demo Dairy",
+        "categories": [
+          "Eggs"
+        ],
+        "pack": {
+          "quantity": 6,
+          "unit": "piece",
+          "approximate": false
+        },
+        "ingredientsText": "Eggs"
+      },
+      "price": {
+        "amountOre": 1690,
+        "basis": "pack",
+        "depositOre": 0,
+        "memberOnly": false,
+        "minimumQuantity": null,
+        "validFrom": null,
+        "validUntil": null
+      },
+      "availability": "available",
+      "checkedAt": "2026-10-08T00:00:00.000Z",
+      "expiresAt": "2026-10-09T00:00:00.000Z",
+      "storeScopeVerified": true
+    }
+  ],
+  "connections": [
+    {
+      "ingredientId": "fixture-rice",
+      "name": "rice",
+      "foodId": "food-rice",
+      "status": "matched",
+      "mainProductId": "demo-rice-1kg",
+      "approvedProducts": [
+        {
+          "productId": "demo-rice-1kg",
+          "identity": "[\"demo-rice-1kg\",null,\"Demo Long Grain Rice 1 kg\",\"Demo Pantry\",[\"Rice\"],[1000,\"g\",false,null],\"Rice\"]"
+        }
+      ],
+      "policyVersion": "owner-halal-brands-strict-2",
+      "reviewedAt": "2026-10-08T00:00:00.000Z",
+      "reason": "Synthetic exact product identity for offline test fixture"
+    },
+    {
+      "ingredientId": "fixture-onion",
+      "name": "onion",
+      "foodId": "food-onion",
+      "status": "matched",
+      "mainProductId": "demo-onion-each",
+      "approvedProducts": [
+        {
+          "productId": "demo-onion-each",
+          "identity": "[\"demo-onion-each\",null,\"Demo Yellow Onion\",\"Demo Produce\",[\"Vegetables\"],[1,\"piece\",false,null],null]"
+        }
+      ],
+      "policyVersion": "owner-halal-brands-strict-2",
+      "reviewedAt": "2026-10-08T00:00:00.000Z",
+      "reason": "Synthetic exact product identity for offline test fixture"
+    },
+    {
+      "ingredientId": "fixture-eggs",
+      "name": "eggs",
+      "foodId": "food-eggs",
+      "status": "matched",
+      "mainProductId": "demo-eggs-6",
+      "approvedProducts": [
+        {
+          "productId": "demo-eggs-6",
+          "identity": "[\"demo-eggs-6\",null,\"Demo Eggs 6 pack\",\"Demo Dairy\",[\"Eggs\"],[6,\"piece\",false,null],\"Eggs\"]"
+        }
+      ],
+      "policyVersion": "owner-halal-brands-strict-2",
+      "reviewedAt": "2026-10-08T00:00:00.000Z",
+      "reason": "Synthetic exact product identity for offline test fixture"
+    },
+    {
+      "ingredientId": "fixture-water",
+      "name": "water",
+      "foodId": "food-water",
+      "status": "non_purchased",
+      "mainProductId": null,
+      "approvedProducts": [],
+      "policyVersion": "owner-halal-brands-strict-2",
+      "reviewedAt": "2026-10-08T00:00:00.000Z",
+      "reason": "Tap water assumed available; synthetic fixture"
+    }
+  ]
+}

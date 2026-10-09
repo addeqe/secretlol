@@ -7,7 +7,9 @@ import {mealOpenApi} from './meal-openapi.ts';
 import {mealSearchPhrase} from '../src/meal-search.ts';
 import {catalogAvailabilityLookupSql,catalogProductLookupSql} from '../src/catalog-query.ts';
 import {calculateMealAvailability,getMealAvailability,mealAvailabilityCacheKey,getMealImmutable,setMealAvailability,setMealImmutable} from './meal-cache.ts';
-export type MealEnv={DB:D1Database;MEAL_DB?:D1Database};
+import {retailMealQuote,type RetailEnv} from './retailers.ts';
+import {retailerAvailability,lookupRetailConnections} from './retailer-availability.ts';
+export type MealEnv={DB:D1Database;MEAL_DB?:D1Database} & RetailEnv;
 type Manifest={datasetId:string;recipes:number;ingredientOccurrences:number;distinctIngredients:number;reviews:number;inventoryHash:string;repository:string;releaseTag:string;sourceSha256:string;parts?:Array<{firstId:number;lastId:number;recipes:number}>};
 type Definition={filter_id:number;domain:string;key:string;label_sv:string;label_en:string;description:string};
 type Run={id:string;catalogue_snapshot_id:string;inventory_hash:string;report_json:string;requirements:number};
@@ -107,6 +109,9 @@ async function quote(request:Request,env:MealEnv,m:Manifest,body:any){
 }
 export async function mealRoutes(request:Request,env:MealEnv,requestJson:(r:Request)=>Promise<any>):Promise<Response>{
   const u=new URL(request.url),route=u.pathname;
+  const chosenRetailer=u.searchParams.get('retailer')??'willys';
+  if(!['willys','coop','ica'].includes(chosenRetailer))return fail('unknown_retailer');
+  const alternative=chosenRetailer==='coop'||chosenRetailer==='ica'?chosenRetailer:null;
   if((u.searchParams.get('cursor')?.length??0)>10000)return fail('invalid_cursor');
   if(route==='/meal/openapi.json'&&request.method==='GET')return json(mealOpenApi(u.origin));
   if(!env.MEAL_DB)return fail('meal_database_not_connected',503);
@@ -129,11 +134,20 @@ export async function mealRoutes(request:Request,env:MealEnv,requestJson:(r:Requ
     const extra=await env.MEAL_DB.prepare("SELECT key,value FROM meal_meta WHERE key IN ('source_metadata','classification_runs','source_counts')").all<{key:string;value:string}>();const audit=Object.fromEntries(extra.results.map(r=>[r.key,JSON.parse(r.value)]));
     return json({manifest:JSON.parse(meta.manifest),sourceMetadata:audit.source_metadata,classificationRuns:audit.classification_runs,sourceCounts:audit.source_counts,archiveUrl:`https://github.com/${m.repository}/releases/download/${m.releaseTag}/recipes_with_filters.sqlite.gz`,apiVersion:'1',conversionPolicy});}
   if(route==='/meal/filters'&&request.method==='GET')return json({datasetId:m.datasetId,definitions:await filterDefinitions(env,m),states:['yes','no','unknown'],strictUnknownsExcluded:true});
-  if(route==='/meal/quote')return request.method==='POST'?quote(request,env,m,await requestJson(request)):fail('method_not_allowed',405);
+  if(route==='/meal/quote'){
+    if(request.method!=='POST')return fail('method_not_allowed',405);
+    const body=await requestJson(request);
+    if(body?.retailer==='coop'||body?.retailer==='ica')return retailMealQuote(env,m,body,ids=>quoteRecipeData(env,m,ids));
+    if(body?.retailer!==undefined&&body.retailer!=='willys')return fail('unknown_retailer');
+    return quote(request,env,m,body);
+  }
   const match=/^\/meal\/recipes\/([1-9]\d{0,9})(?:\/(reviews|archive|cost))?$/.exec(route);
   if(match&&request.method==='GET'){
     const id=Number(match[1]);
-    if(match[2]==='cost')return quote(request,env,m,{recipes:[{recipeId:id,...(u.searchParams.has('servings')?{servings:Number(u.searchParams.get('servings'))}:{})}]});
+    if(match[2]==='cost'){
+      const selected={recipes:[{recipeId:id,...(u.searchParams.has('servings')?{servings:Number(u.searchParams.get('servings'))}:{})}]};
+      return alternative?retailMealQuote(env,m,{...selected,retailer:alternative},ids=>quoteRecipeData(env,m,ids)):quote(request,env,m,selected);
+    }
     if(match[2]==='reviews'){
       const limit=bounded(u,'limit',20,1,100),offset=bounded(u,'offset',0,0,100000);
       const cacheId=`${id}:${offset}:${limit}`,cached=getMealImmutable(env.MEAL_DB,m.datasetId,'reviews',cacheId);if(cached!==null)return json(JSON.parse(cached));
@@ -148,7 +162,17 @@ export async function mealRoutes(request:Request,env:MealEnv,requestJson:(r:Requ
       return document!==null?new Response(document,{headers:{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}}):fail('recipe_not_found',404);
     }
     const raw=await recipeDetail(env,m,id);if(raw===null)return fail('recipe_not_found',404);
-    const doc=JSON.parse(raw);delete doc.reviews;const live=await lookupLive(env,m,[...new Set(doc.ingredients.map((i:any)=>i.ingredient_original))] as string[]);
+    const doc=JSON.parse(raw);delete doc.reviews;
+    const detailNames=[...new Set(doc.ingredients.map((i:any)=>i.ingredient_original))] as string[];
+    if(alternative){
+      const version=await retailerAvailability(env,m,alternative),links=await lookupRetailConnections(env,m,alternative,detailNames);
+      const byName=new Map(links.map(l=>[l.name,l]));
+      return json({datasetId:m.datasetId,recipeId:id,retailer:alternative,...doc,
+        ingredients:doc.ingredients.map((i:any)=>({...i,connection:byName.get(i.ingredient_original)??{status:'connections_refresh_pending',retailer:alternative,productId:null}})),
+        connectionsCurrent:version.current,connectionRunId:version.runId,storeId:version.scope?.storeId??null,
+        reviewsUrl:`/meal/recipes/${id}/reviews`,costUrl:`/meal/recipes/${id}/cost?retailer=${alternative}`});
+    }
+    const live=await lookupLive(env,m,detailNames);
     return json({datasetId:m.datasetId,recipeId:id,...doc,ingredients:doc.ingredients.map((i:any)=>({...i,connection:live.links.get(i.ingredient_original)??{status:live.version.current?'unknown_ingredient':'connections_refresh_pending',willysItemId:null}})),connectionsCurrent:live.version.current,catalogueSnapshotId:live.version.snapshot?.id??null,connectionRunId:live.version.run?.id??null,reviewsUrl:`/meal/recipes/${id}/reviews`,costUrl:`/meal/recipes/${id}/cost`});
   }
   if(route==='/meal/recipes'&&request.method==='GET'){
@@ -164,8 +188,12 @@ export async function mealRoutes(request:Request,env:MealEnv,requestJson:(r:Requ
       if(['diet','excludeAllergen','nutrition'].includes(param))for(const k of filterKeys)groups.push([k]);else if(filterKeys.length)groups.push(filterKeys);
     }
     if(groups.length>20)return fail('too_many_filter_groups');
-    const availableOnly=u.searchParams.get('availableOnly')!=='false',criteria=JSON.stringify({q,groups,availableOnly});
-    const version=await activeRun(env,m);if(availableOnly&&!version.current)return fail('connections_refresh_pending',503);
+    const availableOnly=u.searchParams.get('availableOnly')!=='false',criteria=JSON.stringify({q,groups,availableOnly,...(alternative?{retailer:alternative}:{})});
+    const retailVersion=alternative?await retailerAvailability(env,m,alternative):null;
+    const version=retailVersion?{current:retailVersion.current,
+      snapshot:retailVersion.scope?{id:retailVersion.runId!,store_id:retailVersion.scope.storeId}:null,
+      run:retailVersion.runId?{id:retailVersion.runId}:null}:await activeRun(env,m);
+    if(availableOnly&&!version.current)return fail('connections_refresh_pending',503);
     let after=0;const cursor=u.searchParams.get('cursor');if(cursor&&cursor.length>10000)return fail('invalid_cursor');
     if(cursor){const value=decode(cursor);if(!Array.isArray(value)||value.length!==4||value[0]!==m.datasetId||!Number.isSafeInteger(value[1])||value[1]<0||value[2]!==criteria||availableOnly&&value[3]!==version.run?.id)return fail('cursor_filter_or_dataset_mismatch',409);after=value[1];}
     const params:any[]=[m.datasetId,after,q,q];let sql=`SELECT r.recipe_id,r.summary_json FROM meal_recipes r WHERE r.dataset_id=? AND r.recipe_id>? AND (?='' OR instr(lower(r.name),?)>0)`;
@@ -180,7 +208,7 @@ export async function mealRoutes(request:Request,env:MealEnv,requestJson:(r:Requ
     // current catalogue + current links, then filter immutable ingredient arrays.
     if(availableOnly){
       let now=Date.now();const cacheKey=mealAvailabilityCacheKey(m.datasetId,version.snapshot!.store_id,version.snapshot!.id,version.run!.id,DIETARY_POLICY_VERSION);
-      let brokenNames=getMealAvailability(cacheKey,now);
+      let brokenNames=retailVersion?.brokenNames??getMealAvailability(cacheKey,now);
       if(!brokenNames){
         const links=await env.DB.prepare(`SELECT l.ingredient_name,l.status,l.selected_code AS code,
           ${catalogAvailabilityLookupSql('l.selected_code')} AS data_json
@@ -196,7 +224,7 @@ export async function mealRoutes(request:Request,env:MealEnv,requestJson:(r:Requ
     try{result=await env.MEAL_DB.prepare(sql).bind(...params.slice(0,4),...ftsParams,...params.slice(4)).all<{recipe_id:number;summary_json:string}>();}
     catch(error){if(!ftsClause)throw error;result=await env.MEAL_DB.prepare(sql.replace(ftsClause,'')).bind(...params).all<{recipe_id:number;summary_json:string}>();}
     const shown=result.results.slice(0,limit);
-    return json({datasetId:m.datasetId,recipes:shown.map(r=>JSON.parse(r.summary_json)),nextCursor:result.results.length>limit?encode([m.datasetId,shown.at(-1)!.recipe_id,criteria,availableOnly?version.run!.id:null]):null,catalogueSnapshotId:version.snapshot?.id??null,connectionsCurrent:version.current});
+    return json({datasetId:m.datasetId,...(alternative?{retailer:alternative,storeId:retailVersion?.scope?.storeId??null}:{}),recipes:shown.map(r=>JSON.parse(r.summary_json)),nextCursor:result.results.length>limit?encode([m.datasetId,shown.at(-1)!.recipe_id,criteria,availableOnly?version.run!.id:null]):null,catalogueSnapshotId:version.snapshot?.id??null,connectionsCurrent:version.current});
   }
   if(route==='/meal/ingredients/archive'&&request.method==='GET'){
     const name=u.searchParams.get('name');if(!name||name.length>1000)return fail('ingredient_name_required');
@@ -210,7 +238,16 @@ export async function mealRoutes(request:Request,env:MealEnv,requestJson:(r:Requ
       if(!body||!Array.isArray(body.names)||body.names.length>100||body.names.some((n:any)=>typeof n!=='string'||!n||n.length>1000))return fail('invalid_ingredient_names');names=body.names;
     }else{if(request.method!=='GET')return fail('method_not_allowed',405);const cursor=u.searchParams.get('cursor');if(cursor){const value=decode(cursor);if(!Array.isArray(value)||value[0]!==m.datasetId||typeof value[1]!=='string')return fail('invalid_cursor');after=value[1];}}
     const records=names?await env.MEAL_DB.prepare('SELECT ingredient_name,document_json FROM meal_ingredients WHERE dataset_id=? AND ingredient_name IN (SELECT value FROM json_each(?)) ORDER BY ingredient_name').bind(m.datasetId,JSON.stringify(names)).all<{ingredient_name:string;document_json:string}>():await env.MEAL_DB.prepare('SELECT ingredient_name,document_json FROM meal_ingredients WHERE dataset_id=? AND ingredient_name>? ORDER BY ingredient_name LIMIT ?').bind(m.datasetId,after,limit+1).all<{ingredient_name:string;document_json:string}>();
-    const shown=names?records.results:records.results.slice(0,limit),live=await lookupLive(env,m,shown.map(r=>r.ingredient_name));
+    const shown=names?records.results:records.results.slice(0,limit);
+    if(alternative){
+      const version=await retailerAvailability(env,m,alternative),links=await lookupRetailConnections(env,m,alternative,shown.map(r=>r.ingredient_name));
+      const byName=new Map(links.map(l=>[l.name,l]));
+      const documents=new Map(shown.map(r=>{const doc=JSON.parse(r.document_json);delete doc.sourceConnection;
+        return[r.ingredient_name,{...doc,connection:byName.get(r.ingredient_name)??{status:'connections_refresh_pending',retailer:alternative,productId:null}}];}));
+      return json({datasetId:m.datasetId,retailer:alternative,ingredients:names?names.map(name=>documents.get(name)??{name,status:'unknown_ingredient'}):[...documents.values()],connectionsCurrent:version.current,
+        nextCursor:!names&&records.results.length>limit?encode([m.datasetId,shown.at(-1)!.ingredient_name]):null});
+    }
+    const live=await lookupLive(env,m,shown.map(r=>r.ingredient_name));
     const documents=new Map(shown.map(r=>{const doc=JSON.parse(r.document_json);delete doc.sourceConnection;return[r.ingredient_name,{...doc,connection:live.links.get(r.ingredient_name)??{status:live.version.current?'unknown_ingredient':'connections_refresh_pending',willysItemId:null}}];}));
     return json({datasetId:m.datasetId,ingredients:names?names.map(name=>documents.get(name)??{name,status:'unknown_ingredient'}):[...documents.values()],connectionsCurrent:live.version.current,nextCursor:!names&&records.results.length>limit?encode([m.datasetId,shown.at(-1)!.ingredient_name]):null});
   }
