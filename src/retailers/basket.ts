@@ -369,12 +369,18 @@ export function optimizeBasket(request: BasketRequest): BasketResult {
   const observations = [...request.observations].sort((a, b) => a.product.id.localeCompare(b.product.id)
     || (a.price?.amountOre ?? Number.MAX_SAFE_INTEGER) - (b.price?.amountOre ?? Number.MAX_SAFE_INTEGER)
     || a.checkedAt.localeCompare(b.checkedAt));
+  const observationsById = new Map<string, ProductObservation[]>();
+  for (const observation of observations) {
+    const matching = observationsById.get(observation.product.id);
+    if (matching) matching.push(observation);
+    else observationsById.set(observation.product.id, [observation]);
+  }
 
   for (const group of groups) {
     const options: PricedOption[] = [];
     const reasons = new Set<string>();
     for (const id of group.approved) {
-      const matching = observations.filter(o => o.product.id === id);
+      const matching = observationsById.get(id) ?? [];
       if (!matching.length) { reasons.add('approved_product_not_observed'); continue; }
       for (const observation of matching) {
         const result = optionFor(observation, group, request, now);

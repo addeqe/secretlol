@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { LocalDatabase, rows } from '../src/database.ts';
 import { DIETARY_POLICY_VERSION } from '../src/dietary-policy.ts';
 import { collectReference } from '../src/retailers/collection.ts';
-import { approvedObservations, productIdentity } from '../src/retailers/identity.ts';
+import { approvedObservations, cachedIngredientPolicy, productIdentity, reviewedProductPolicy } from '../src/retailers/identity.ts';
 import type { ReviewedConnection } from '../src/retailers/identity.ts';
 import { LocalProductResolver, MemoryObservationCache } from '../src/retailers/resolver.ts';
 import { configureRetailDataset, publishRetailObservations, readRetailObservations, retailSchema } from '../src/retailers/storage.ts';
@@ -24,6 +24,25 @@ test('product identity survives checkpoint key reordering and detects package ch
   assert.equal(productIdentity(original),productIdentity(reordered));
   assert.notEqual(productIdentity(original),productIdentity({...original,pack:{...pack,quantity:750}}));
   assert.notEqual(productIdentity(original),productIdentity({...original,pack:{...pack,drainedGrams:300}}));
+});
+
+test('memoized identity and dietary checks invalidate when reviewed product evidence changes', () => {
+  const product = { id: 'cache-test', ean: null, name: 'Cucumber', brand: null, categories: ['Vegetables'],
+    pack: { quantity: 300, unit: 'g' as const, approximate: false }, ingredientsText: 'Cucumber, water' };
+  const original = productIdentity(product);
+  assert.equal(productIdentity(product), original);
+  product.name = 'Wine cucumber';
+  assert.notEqual(productIdentity(product), original);
+
+  const policyProduct = { name: 'Cucumber', brand: null as string|null, categories: ['Vegetables'], ingredientsText: 'Water, vinegar' };
+  assert.equal(reviewedProductPolicy(policyProduct), null);
+  policyProduct.ingredientsText = 'Water, white wine';
+  assert.match(reviewedProductPolicy(policyProduct) ?? '', /alcohol/);
+  policyProduct.ingredientsText = 'Water';
+  policyProduct.categories.push('Kött');
+  assert.match(reviewedProductPolicy(policyProduct, 'beef') ?? '', /meat_brand/);
+  assert.equal(cachedIngredientPolicy('vinegar').blockedReason, null);
+  assert.equal(cachedIngredientPolicy('white wine').blockedReason, 'alcohol');
 });
 
 function freshDataset(at = now()): RetailDataset & { sourceMarker: string; generatedAt: string } {

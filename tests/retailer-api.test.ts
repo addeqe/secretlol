@@ -52,6 +52,25 @@ function d1(db: LocalDatabase): D1Database {
   } } as unknown as D1Database;
 }
 
+function d1WithConflictingDuplicateObservation(db: LocalDatabase): D1Database {
+  const base = d1(db);
+  return { prepare(sql: string) {
+    const statement = base.prepare(sql) as any;
+    if (sql.toLowerCase().includes('from retail_products')) {
+      const all = statement.all.bind(statement);
+      statement.all = async () => {
+        const response = await all();
+        const rice = response.results.find((row: any) => JSON.parse(row.observation_json).product.id === 'demo-rice-1kg');
+        if (!rice) return response;
+        const observation = JSON.parse(rice.observation_json);
+        observation.product.name = 'Conflicting duplicate identity';
+        return { ...response, results: [...response.results, { observation_json: JSON.stringify(observation) }] };
+      };
+    }
+    return statement;
+  } } as unknown as D1Database;
+}
+
 async function seed(data = fixture()) {
   const db = database();
   await configureRetailDataset(db, data);
@@ -188,6 +207,20 @@ test('reference quote combines multiple recipes and rounds whole packs after sum
       ['demo-eggs-6', 1], ['demo-onion-each', 3], ['demo-rice-1kg', 2],
     ]);
     assert.equal(body.selectedMenuId, 'week');
+  } finally { db.close(); }
+});
+
+test('a conflicting duplicate observation keeps its approved product ineligible', async () => {
+  const { db, data } = await seed();
+  try {
+    const docs = new Map<number, RecipeDocument>([[1, recipe([{ ingredient_original: 'rice', unit: 'g', measured_quantity: 100 }])]]);
+    const response = await retailMealQuote({ COOP_DB: d1WithConflictingDuplicateObservation(db) }, manifest,
+      { retailer: 'coop', recipes: [{ recipeId: 1 }] }, loader(docs));
+    assert.equal(response.status, 200);
+    const body = await response.json() as any;
+    assert.equal(body.basket.complete, false);
+    assert.equal(body.basket.lines.length, 0);
+    assert.equal(body.basket.unresolved[0].reason, 'no_approved_compatible_product');
   } finally { db.close(); }
 });
 

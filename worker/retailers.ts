@@ -1,6 +1,6 @@
 import { CoopClient } from '../src/retailers/coop.ts';
 import { IcaClient } from '../src/retailers/ica.ts';
-import { observationUsable, productIdentity, reviewedProductPolicy, type ReviewedConnection } from '../src/retailers/identity.ts';
+import { cachedIngredientPolicy, observationUsable, productIdentity, reviewedProductPolicy, type ReviewedConnection } from '../src/retailers/identity.ts';
 import { mappedConnections, type LocalMapping } from '../src/retailers/local-mapping.ts';
 import { LocalProductResolver, MemoryObservationCache, type ObservationCache } from '../src/retailers/resolver.ts';
 import { rankMenuFinalists } from '../src/retailers/basket.ts';
@@ -8,7 +8,7 @@ import { postalCode, productId, scopeKey, validateScope } from '../src/retailers
 import type { IngredientDemand, MenuFinalist, ProductObservation, RetailClient, RetailerId, StoreScope, QuantityUnit } from '../src/retailers/types.ts';
 import { canonicalAmount } from '../src/meal-cost.ts';
 import type { IngredientAmount, AmountOverride } from '../src/meal-cost.ts';
-import { DIETARY_POLICY_VERSION, ingredientPolicy } from '../src/dietary-policy.ts';
+import { DIETARY_POLICY_VERSION } from '../src/dietary-policy.ts';
 
 export type RetailEnv = { COOP_DB?: D1Database; ICA_DB?: D1Database;
   RETAILERS_LIVE_ENABLED?: string; COOP_PUBLIC_SUBSCRIPTION_KEY?: string };
@@ -236,10 +236,19 @@ export async function retailMealQuote(env: RetailEnv, manifest: Manifest, body: 
   if (tracked.length > 400) return fail('local_lookup_product_budget');
   const now = Date.now(), referenceObservations = await observations(db,retailer,reference,tracked);
   const withApproved = (items: MenuFinalist[], reviewed: ReviewedConnection[], found: ProductObservation[], store: StoreScope) => {
+    const foundById = new Map<string, ProductObservation[]>();
+    for (const observation of found) {
+      const sameId = foundById.get(observation.product.id) ?? [];
+      sameId.push(observation);
+      foundById.set(observation.product.id, sameId);
+    }
     const eligible = new Map(reviewed.map(c=>[c.ingredientId,
-      c.status!=='matched'||c.policyVersion!==DIETARY_POLICY_VERSION||ingredientPolicy(c.name).blockedReason ? []
-        : c.approvedProducts.filter(p=>!found.some(o=>o.product.id===p.productId
-          && (productIdentity(o.product)!==p.identity||reviewedProductPolicy(o.product,c.name)))).map(p=>p.productId)]));
+      c.status!=='matched'||c.policyVersion!==DIETARY_POLICY_VERSION||cachedIngredientPolicy(c.name).blockedReason ? []
+        : c.approvedProducts.filter(p=>{
+          const matches=foundById.get(p.productId);
+          return !matches || matches.length === 0 || matches.every(observation =>
+            productIdentity(observation.product)===p.identity && !reviewedProductPolicy(observation.product,c.name));
+        }).map(p=>p.productId)]));
     return items.map(f=>({...f,demands:f.demands.map(d=>({...d,approvedProductIds:eligible.get(d.ingredientId) ?? []}))}));
   };
   const referenceFinalists = withApproved(finalists,connections,referenceObservations,reference);
@@ -256,7 +265,8 @@ export async function retailMealQuote(env: RetailEnv, manifest: Manifest, body: 
     try { priced = (await localResolver.resolve(scope,reviewed,now)).observations; }
     catch { return fail('retailer_local_prices_unavailable',503); }
   }
-  const ranked = rankMenuFinalists(withApproved(finalists,reviewed,priced,scope),{retailer,scope,observations:priced,now,
+  const finalCandidates = body.priceMode === 'local' ? withApproved(finalists,reviewed,priced,scope) : referenceFinalists;
+  const ranked = rankMenuFinalists(finalCandidates,{retailer,scope,observations:priced,now,
     maxStates:Math.floor(1000/candidates.length),maxWork:Math.floor(20000/candidates.length),budgetOre:body.budgetOre});
   if(body.priceMode!=='local')for(const f of ranked)f.referenceCostOre=f.basket.purchaseCostOre;
   const winner = ranked.find(f=>f.basket.complete && f.basket.withinBudget !== false);

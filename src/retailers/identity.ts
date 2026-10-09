@@ -5,33 +5,77 @@ export type ReviewedConnection = { ingredientId: string; name: string; foodId: s
   status: 'matched' | 'needs_review' | 'unavailable' | 'non_purchased';
   mainProductId: string | null; approvedProducts: Array<{ productId: string; identity: string }>;
   policyVersion: string; reviewedAt: string; reason: string };
+type ProductIdentityCacheEntry = { id: string; ean: string|null; name: string; brand: string|null;
+  categories: string[]; pack: [number, string, boolean, number|null]|null; ingredientsText: string|null; identity: string };
+const productIdentityCache = new WeakMap<RetailProduct, ProductIdentityCacheEntry>();
+const policyProductCache = new WeakMap<object, { name: string; brand: string|null;
+  ingredientsText: string|null; categories: string[];
+  results: Map<string, string|null> }>();
+const ingredientPolicyCache = new Map<string, ReturnType<typeof ingredientPolicy>>();
+
+export function cachedIngredientPolicy(name: string) {
+  const key = `${DIETARY_POLICY_VERSION}\0${name}`;
+  const cached = ingredientPolicyCache.get(key);
+  if (cached) { ingredientPolicyCache.delete(key); ingredientPolicyCache.set(key, cached); return cached; }
+  const result = ingredientPolicy(name);
+  if (ingredientPolicyCache.size >= 512) ingredientPolicyCache.delete(ingredientPolicyCache.keys().next().value!);
+  ingredientPolicyCache.set(key, result);
+  return result;
+}
+
 export function productIdentity(product: RetailProduct): string {
+  const cached = productIdentityCache.get(product);
+  const pack = product.pack ? [product.pack.quantity, product.pack.unit,
+    product.pack.approximate, product.pack.drainedGrams ?? null] as [number,string,boolean,number|null] : null;
+  if (cached && cached.id === product.id && cached.ean === product.ean && cached.name === product.name
+    && cached.brand === product.brand && cached.ingredientsText === product.ingredientsText
+    && (cached.pack === null) === (pack === null)
+    && cached.pack?.[0] === pack?.[0] && cached.pack?.[1] === pack?.[1]
+    && cached.pack?.[2] === pack?.[2] && cached.pack?.[3] === pack?.[3]
+    && cached.categories.length === product.categories.length
+    && cached.categories.every((category, index) => category === product.categories[index])) return cached.identity;
   // Checkpoints and JSON exports may reorder object keys. Identity must depend
   // on package values, while still noticing genuine size/drained-weight changes.
-  const pack = product.pack ? [product.pack.quantity, product.pack.unit,
-    product.pack.approximate, product.pack.drainedGrams ?? null] : null;
-  return JSON.stringify([product.id, product.ean, product.name, product.brand,
-    [...product.categories].sort(), pack, product.ingredientsText]);
+  const categories = [...product.categories], identity = JSON.stringify([product.id, product.ean, product.name, product.brand,
+    [...categories].sort(), pack, product.ingredientsText]);
+  productIdentityCache.set(product, { id: product.id, ean: product.ean, name: product.name, brand: product.brand,
+    categories, pack, ingredientsText: product.ingredientsText, identity });
+  return identity;
 }
 /** Apply the owner policy to both the package title and disclosed ingredients. */
 export function reviewedProductPolicy(product: Pick<RetailProduct, 'name'|'brand'|'categories'|'ingredientsText'>, ingredientName?: string): string | null {
+  const categories = product.categories ?? [];
+  const productCache = policyProductCache.get(product);
+  const sameProduct = productCache?.name === product.name && productCache.brand === product.brand
+    && productCache.ingredientsText === product.ingredientsText && productCache.categories.length === categories.length
+    && productCache.categories.every((category, index) => category === categories[index]);
+  const resultKey = `${DIETARY_POLICY_VERSION}\0${ingredientName ?? ''}`;
+  if (sameProduct && productCache.results.has(resultKey)) return productCache.results.get(resultKey)!;
   const titleReason = productPolicy(product, ingredientName);
-  if (titleReason) return titleReason;
+  if (titleReason) return remember(titleReason);
   const text = product.ingredientsText?.trim();
-  if (!text) return null;
+  if (!text) return remember(null);
   const normalized = text.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase();
   const eggOnlyHenWording = /\b(?:egg|eggs|egg yolk|agg|aggula|aeg)\b/.test(normalized)
     && !/\b(?:chicken|kyckling\w*|poultry|h[oö]n(?:s)?k[oö]tt)\b/.test(normalized);
   const policyText = eggOnlyHenWording ? normalized.replace(/\b(?:hons|hens?)\b/g, ' ') : text;
-  const ingredientReason = ingredientPolicy(policyText).blockedReason;
-  if (ingredientReason) return `product_excluded_ingredient_${ingredientReason}`;
+  const ingredientReason = cachedIngredientPolicy(policyText).blockedReason;
+  if (ingredientReason) return remember(`product_excluded_ingredient_${ingredientReason}`);
   if (/\b(?:ystenzym|lope|rennet)\b/.test(normalized)
     && !/\b(?:mikrobiell\w*|microbial\w*|vegetabilisk\w*|vegetable\s+rennet)\b/.test(normalized)) {
-    return 'product_excluded_uncertain_animal_source';
+    return remember('product_excluded_uncertain_animal_source');
   }
   const disclosedMeatReason = productPolicy({ name: policyText, brand: product.brand, categories: [] }, ingredientName);
-  return disclosedMeatReason?.includes('meat_brand_not_permitted')
-    ? 'product_excluded_ingredient_meat_brand_not_permitted' : null;
+  return remember(disclosedMeatReason?.includes('meat_brand_not_permitted')
+    ? 'product_excluded_ingredient_meat_brand_not_permitted' : null);
+  function remember(reason: string|null) {
+    const results = sameProduct ? productCache.results : new Map<string, string|null>();
+    if (results.size >= 16) results.delete(results.keys().next().value!);
+    results.set(resultKey, reason);
+    policyProductCache.set(product, { name: product.name, brand: product.brand,
+      ingredientsText: product.ingredientsText ?? null, categories: [...categories], results });
+    return reason;
+  }
 }
 export function observationUsable(observation: ProductObservation, retailer: RetailerId, scope: StoreScope,
   now = Date.now()): boolean {
@@ -48,7 +92,7 @@ export function observationUsable(observation: ProductObservation, retailer: Ret
 export function approvedObservations(connection: ReviewedConnection, observations: ProductObservation[],
   retailer: RetailerId, scope: StoreScope, now = Date.now()): ProductObservation[] {
   if (connection.status !== 'matched' || connection.policyVersion !== DIETARY_POLICY_VERSION
-    || ingredientPolicy(connection.name).blockedReason) return [];
+    || cachedIngredientPolicy(connection.name).blockedReason) return [];
   const approved = new Map(connection.approvedProducts.map(p => [p.productId, p.identity]));
   return observations.filter(o => approved.has(o.product.id) && observationUsable(o, retailer, scope, now)
     && approved.get(o.product.id) === productIdentity(o.product) && !reviewedProductPolicy(o.product, connection.name));
@@ -85,7 +129,7 @@ export function validateConnections(connections: ReviewedConnection[], products:
     if (!c.ingredientId || !c.name?.trim() || c.policyVersion !== DIETARY_POLICY_VERSION
       || !Number.isFinite(Date.parse(c.reviewedAt)) || !c.reason?.trim()
       || !['matched','needs_review','unavailable','non_purchased'].includes(c.status)
-      || ingredientPolicy(c.name).blockedReason) throw new Error('invalid_connection_review');
+      || cachedIngredientPolicy(c.name).blockedReason) throw new Error('invalid_connection_review');
     if (c.status === 'non_purchased' && !/^(?:(?:boiling|hot|cold|warm|ice|tap|filtered|lukewarm|distilled) )?water$|^ice cubes?$/i.test(c.name)) {
       throw new Error('non_purchased_requires_water');
     }

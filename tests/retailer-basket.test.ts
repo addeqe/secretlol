@@ -111,6 +111,15 @@ test('excludes stale, unavailable, cross-store, unverified, member-only, and qua
   assert.equal(result.unresolved[0].reason, 'conditional_price_excluded');
 });
 
+test('indexes duplicate-ID observations without losing the first current usable entry', () => {
+  const stale = observed('duplicate', 100, 1, { expiresAt: '2026-10-08T09:59:00Z' });
+  const current = observed('duplicate', 100, 120);
+  const result = optimizeBasket(request([demand('flour', 100, ['duplicate'])], [current, stale]));
+  assert.equal(result.complete, true);
+  assert.equal(result.purchaseCostOre, 120);
+  assert.equal(result.lines[0].productId, 'duplicate');
+});
+
 test('excludes future observations and prices outside their public validity window', () => {
   const result = optimizeBasket(request([demand('flour', 100, ['future-check', 'future-price', 'expired-price'])], [
     observed('future-check', 100, 1, { checkedAt: '2026-10-08T10:02:00Z' }),
