@@ -20,6 +20,8 @@ API-tester kontrollerar att Coop/ICA-sökning filtrerar bort endast berörda rec
 
 Coops automatiska källa har nu verifierats lokalt med riktiga anrop för pickupbutik `035000`: kategoriträd, tre produktuppslag och två separata sidor med 24 Skafferi-produkter vardera, genom fyra paced anrop utan återförsök. Kategorin rapporterade 1 836 produkter; provet kontrollerade bara dessa två sidor. Parsergranskningen rättade att förpackningspris kunde få jämförprisets kg-/literenhet. Regressionen genom parser och korgberäkning bekräftar att 640 g tortilla och 250 g smör kräver två respektive ett paket, 8 940 öre i inköp och 5 965 öre i förbrukning. Testerna omfattar också offentligt erbjudande, medlems-/mängderbjudande, riktig viktvara, pant, ofullständiga svar och verkliga navigationsposter.
 
+Butikssökningen behåller nu både Coops fysiska pickup-punkts-ID och fulfilment-butikens pris-ID när de skiljer sig åt, till exempel ett skåp som tillhör en annan prisbutik. Offerten använder fulfilment-butikens onlinepris för pickup; den visar inte hyllpriset på den fysiska pickup-platsen.
+
 ICA:s butikssökning och butiksspecifika kategoriträd fungerar från servern. Produktanropen får CloudFront 403 trots korrekt butiksadress och anropsformat. Den normala webbappen visar priser genom sin AWS WAF-integration; någon reproducerbar automatisk produkt-/priskälla för GitHub/Worker har inte verifierats. ICA:s prisadapter hålls avstängd. Se [källunderlaget](upstream-ica.md) och [återstående molnkälla](ica-browser-bridge.md).
 
 Fullständiga scans, massgranskning, nya molndatabaser, importer och driftsättning har inte körts. Dagsjobbet är förberett och avstängt. Coop måste dessutom verifieras i den tänkta körmiljön innan drift.

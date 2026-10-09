@@ -1,6 +1,7 @@
 import type { ProductObservation, RetailCategory, RetailClient, RetailPage, StoreScope } from './types.ts';
 import { RetailerUnsupportedError, scopeKey, validateScope } from './types.ts';
 import { validateObservation } from './identity.ts';
+import { CoopMissingProductsError } from './coop.ts';
 function leaves(categories: RetailCategory[]): RetailCategory[] {
   const found:RetailCategory[]=[];
   const definitions=new Map<string,string>(),active=new Set<string>(),leafIds=new Set<string>();
@@ -59,15 +60,50 @@ export async function collectReference(client: RetailClient, scope: StoreScope,
   if(!products.size)throw new Error('empty_reference_catalogue');
   return {retailer:client.retailer,scope,products:[...products.values()],categories:report,pages};
 }
-export async function collectTracked(client:RetailClient,scope:StoreScope,ids:string[],batchSize=25){
+export async function collectTracked(client:RetailClient,scope:StoreScope,ids:string[],batchSize=25,
+  priorObservations:ProductObservation[]=[]){
   validateScope(scope);
   if(!client.capabilities.productLookup||!client.capabilities.verifiedStorePricing)throw new RetailerUnsupportedError(client.retailer,'tracked_store_prices');
   const unique=[...new Set(ids)].sort();if(!unique.length||unique.length>5000||!Number.isSafeInteger(batchSize)||batchSize<1||batchSize>100)throw new Error('invalid_tracked_collection');
-  const size=client.capabilities.batchLookup?batchSize:1,observations:ProductObservation[]=[];
+  const priorById=new Map<string,ProductObservation>();
+  for(const o of priorObservations){validateObservation(o,client.retailer,scope);if(priorById.has(o.product.id))throw new Error('duplicate_prior_tracked_observation');priorById.set(o.product.id,o);}
+  const size=client.capabilities.batchLookup?batchSize:1,observations:ProductObservation[]=[],observedIds=new Set<string>();
+  const readGroup=async(group:string[])=>{
+    try{
+      const found=await client.products(scope,group);
+      if(found.length!==group.length||new Set(found.map(o=>o.product.id)).size!==group.length||found.some(o=>!group.includes(o.product.id)))throw new Error('incomplete_tracked_refresh');
+      for(const o of found)validateObservation(o,client.retailer,scope);
+      return {found,missing:[] as string[]};
+    }catch(error){
+      if(!(error instanceof CoopMissingProductsError))throw error;
+      const requestedSet=new Set(group),foundIds=new Set(error.observations.map(o=>o.product.id));
+      const expectedMissing=group.filter(id=>!foundIds.has(id));
+      if(client.retailer!=='coop'||error.retailer!==client.retailer
+        ||scopeKey(client.retailer,error.scope)!==scopeKey(client.retailer,scope)
+        ||error.requestedProductIds.length!==group.length||group.some(id=>!error.requestedProductIds.includes(id))
+        ||new Set(error.requestedProductIds).size!==group.length
+        ||error.observations.some(o=>!requestedSet.has(o.product.id))||foundIds.size!==error.observations.length
+        ||expectedMissing.length!==error.missingProductIds.length||expectedMissing.some(id=>!error.missingProductIds.includes(id))
+        ||new Set(error.missingProductIds).size!==error.missingProductIds.length)throw new Error('invalid_coop_missing_product_result');
+      for(const o of error.observations)validateObservation(o,client.retailer,scope);
+      return {found:error.observations,missing:expectedMissing};
+    }
+  };
+  const append=(found:ProductObservation[])=>{for(const o of found){if(observedIds.has(o.product.id))throw new Error('duplicate_tracked_refresh_product');observedIds.add(o.product.id);observations.push(o);}};
   for(let i=0;i<unique.length;i+=size){
-    const group=unique.slice(i,i+size),found=await client.products(scope,group);
-    if(found.length!==group.length||new Set(found.map(o=>o.product.id)).size!==group.length||found.some(o=>!group.includes(o.product.id)))throw new Error('incomplete_tracked_refresh');
-    for(const o of found)validateObservation(o,client.retailer,scope);observations.push(...found);
+    const group=unique.slice(i,i+size),first=await readGroup(group);append(first.found);
+    if(!first.missing.length)continue;
+    // One additional, bounded by-ID request distinguishes a temporary omission from a
+    // consistently disappeared listing. Never infer disappearance from malformed responses.
+    const confirmation=await readGroup(first.missing);append(confirmation.found);
+    for(const id of confirmation.missing){
+      const prior=priorById.get(id);if(!prior)throw new Error('confirmed_missing_product_without_prior_identity');
+      const now=Date.now(),checkedAt=new Date(now).toISOString(),expiresAt=new Date(now+24*60*60_000).toISOString();
+      const identityEvidence=prior.identityEvidence??{status:'prior' as const,lastVerifiedAt:prior.checkedAt};
+      const retained:ProductObservation={...prior,price:null,availability:'unknown',checkedAt,expiresAt,
+        storeScopeVerified:false,identityEvidence};
+      validateObservation(retained,client.retailer,scope);append([retained]);
+    }
   }
   return observations;
 }

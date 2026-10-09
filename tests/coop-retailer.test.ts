@@ -1,9 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { CoopClient, parseCoopProduct } from '../src/retailers/coop.ts';
+import { CoopClient, CoopMissingProductsError, parseCoopProduct } from '../src/retailers/coop.ts';
 import { optimizeBasket } from '../src/retailers/basket.ts';
-import { observationUsable } from '../src/retailers/identity.ts';
+import { observationUsable, productIdentity, validateObservation } from '../src/retailers/identity.ts';
+import type { ReviewedConnection } from '../src/retailers/identity.ts';
+import { DIETARY_POLICY_VERSION } from '../src/dietary-policy.ts';
+import { connectionHealth } from '../src/retailers/connection-health.ts';
+import { collectTracked } from '../src/retailers/collection.ts';
 import { LocalProductResolver } from '../src/retailers/resolver.ts';
 import { RetailerUnsupportedError, type StoreScope } from '../src/retailers/types.ts';
 
@@ -12,6 +16,16 @@ const productFixture = JSON.parse(readFileSync(new URL('./fixtures/retailers/coo
 const storesFixture = JSON.parse(readFileSync(new URL('./fixtures/retailers/coop-stores.json', import.meta.url), 'utf8')) as unknown;
 const personalizationFixture = JSON.parse(readFileSync(new URL('./fixtures/retailers/coop-personalization.json', import.meta.url), 'utf8')) as any;
 const scope: StoreScope = { storeId: '251300', channel: 'pickup' };
+
+test('default Coop transport preserves the native fetch receiver used by Workers', async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = function(this:unknown) {
+    assert.equal(this,globalThis);
+    return Promise.resolve(Response.json(categoriesFixture));
+  } as typeof fetch;
+  try { assert.ok((await new CoopClient({publicSubscriptionKey:'test-public-key'}).categories(scope)).length); }
+  finally { globalThis.fetch = original; }
+});
 
 test('Coop category tree maps recursive ids and labels from an injected fixture response', async () => {
   const calls: string[] = [];
@@ -103,6 +117,10 @@ test('Coop postal lookup maps nearby pickup stores and omits outlets without pic
   assert.deepEqual(await client.stores('114 55'), [{
     retailer: 'coop', id: '035000', name: 'Coop Daglivs', channels: ['pickup'],
     postalCode: '11234', address: 'Sankt Eriksgatan 34-38, Stockholm', url: '/butiker-erbjudanden/coop-daglivs',
+    pricingStoreId: '035000',
+  }, {
+    retailer: 'coop', id: '252700', name: 'Coop Träkvista Alltid Öppet', channels: ['pickup'],
+    postalCode: '179 75', address: 'Tegelbruksvägen 1, Ekerö', pricingStoreId: '252700', pickupPointId: '990326',
   }]);
   assert.equal(called?.pathname, '/ecommerce/coop/pointofservices');
   assert.equal(called?.searchParams.get('query'), '11455');
@@ -249,13 +267,92 @@ test('Coop offer expiry bounds source validity while local cache remains limited
   assert.equal(ordinaryCached.expiresAt, '2026-10-08T10:30:00.000Z');
 });
 
-test('product lookup rejects missing IDs and malformed result counts instead of caching a partial lookup', async () => {
+test('product lookup distinguishes a well-formed missing ID from malformed by-ID responses', async () => {
   const missingClient = new CoopClient({ publicSubscriptionKey: 'test-public-key', transport: async () =>
     Response.json({ results: { count: 0, items: [] } }) });
-  await assert.rejects(missingClient.products(scope, ['7311070337297']), /coop_incomplete_products_response/);
+  await assert.rejects(missingClient.products(scope, ['7311070337297']), (error: unknown) => {
+    assert.ok(error instanceof CoopMissingProductsError);
+    assert.deepEqual(error.scope, scope);
+    assert.deepEqual(error.requestedProductIds, ['7311070337297']);
+    assert.deepEqual(error.missingProductIds, ['7311070337297']);
+    assert.deepEqual(error.observations, []);
+    return true;
+  });
   const malformedClient = new CoopClient({ publicSubscriptionKey: 'test-public-key', transport: async () =>
-    Response.json({ results: { items: [] } }) });
-  await assert.rejects(malformedClient.products(scope, ['7311070337297']), /coop_unexpected_products_response/);
+    Response.json({ results: { count: 1, items: [] } }) });
+  await assert.rejects(malformedClient.products(scope, ['7311070337297']), /coop_incomplete_products_response/);
+  const inconsistentClient = new CoopClient({ publicSubscriptionKey: 'test-public-key', transport: async () =>
+    Response.json({ results: { count: 0, items: [personalizationFixture.byId.results.items[0]] } }) });
+  await assert.rejects(inconsistentClient.products(scope, ['7311070337297']), /coop_unexpected_products_response/);
+  const duplicateClient = new CoopClient({ publicSubscriptionKey: 'test-public-key', transport: async () =>
+    Response.json({ results: { count: 2, items: [personalizationFixture.byId.results.items[0], personalizationFixture.byId.results.items[0]] } }) });
+  await assert.rejects(duplicateClient.products(scope, ['7311070337297']), /coop_incomplete_products_response/);
+  const unrequestedClient = new CoopClient({ publicSubscriptionKey: 'test-public-key', transport: async () =>
+    Response.json({ results: { count: 1, items: [{ ...personalizationFixture.byId.results.items[0], id: '99999999' }] } }) });
+  await assert.rejects(unrequestedClient.products(scope, ['7311070337297']), /coop_incomplete_products_response/);
+});
+
+test('tracked refresh confirms disappearance once and retains only explicitly prior identity evidence', async () => {
+  const id = '7311070337297';
+  const prior = await new CoopClient({ publicSubscriptionKey: 'test-public-key', transport: async () =>
+    Response.json({ results: { count: 1, items: [personalizationFixture.byId.results.items[0]] } }) }).products(scope, [id]);
+  let calls = 0;
+  const missing = new CoopClient({ publicSubscriptionKey: 'test-public-key', now: () => new Date('2026-10-09T10:00:00Z'),
+    transport: async () => { calls++; return Response.json({ results: { count: 0, items: [] } }); } });
+  const [observation] = await collectTracked(missing, scope, [id], 25, prior);
+  assert.equal(calls, 2);
+  assert.equal(observation.product.id, id);
+  assert.equal(observation.identityEvidence?.status, 'prior');
+  assert.equal(observation.identityEvidence?.lastVerifiedAt, prior[0].checkedAt);
+  assert.equal(observation.price, null);
+  assert.equal(observation.availability, 'unknown');
+  assert.equal(observation.storeScopeVerified, false);
+  validateObservation(observation, 'coop', scope);
+  assert.equal(observationUsable(observation, 'coop', scope), false);
+});
+
+test('tracked refresh keeps returned products and recovers missing reserves on the confirmation lookup', async () => {
+  const first = '7311070337297', second = '7310865561121';
+  const productA = { ...personalizationFixture.byId.results.items[0], id: first };
+  const productB = { ...personalizationFixture.byId.results.items[1], id: second };
+  const calls: string[][] = [];
+  const client = new CoopClient({ publicSubscriptionKey: 'test-public-key', transport: async (_url, init) => {
+    const body = JSON.parse(String(init?.body)) as string[];
+    calls.push(body);
+    return body.length === 2
+      ? Response.json({ results: { count: 1, items: [productA] } })
+      : Response.json({ results: { count: 1, items: [productB] } });
+  } });
+  const found = await collectTracked(client, scope, [first, second]);
+  assert.deepEqual(calls, [[second, first].sort(), [second]]);
+  assert.deepEqual(found.map(o => o.product.id), [first, second]);
+  assert.ok(found.every(o => o.price && o.storeScopeVerified && !o.identityEvidence));
+});
+
+test('confirmed missing primary keeps a current reserve usable for the ingredient', async () => {
+  const mainId = '7311070337297', reserveId = '7310865561121';
+  const [main, reserve] = await new CoopClient({ publicSubscriptionKey: 'test-public-key', transport: async () =>
+    Response.json({ results: { count: 2, items: personalizationFixture.byId.results.items.slice(0, 2) } })
+  }).products(scope, [mainId, reserveId]);
+  let request = 0;
+  const source = new CoopClient({ publicSubscriptionKey: 'test-public-key', transport: async () => {
+    request++;
+    return request === 1
+      ? Response.json({ results: { count: 1, items: [personalizationFixture.byId.results.items[1]] } })
+      : Response.json({ results: { count: 0, items: [] } });
+  } });
+  const refreshed = await collectTracked(source, scope, [mainId, reserveId], 25, [main, reserve]);
+  const connection: ReviewedConnection = {
+    ingredientId: 'ing_test', name: 'test ingredient', foodId: null, status: 'matched', mainProductId: mainId,
+    approvedProducts: [{ productId: mainId, identity: productIdentity(main.product) },
+      { productId: reserveId, identity: productIdentity(reserve.product) }],
+    policyVersion: DIETARY_POLICY_VERSION, reviewedAt: main.checkedAt, reason: 'test',
+  };
+  const health = connectionHealth(connection, refreshed, 'coop', scope);
+  assert.equal(health.status, 'matched');
+  assert.equal(health.productId, reserveId);
+  assert.equal(health.reason, 'approved_alternative_available');
+  assert.equal(refreshed.find(o => o.product.id === mainId)?.identityEvidence?.status, 'prior');
 });
 
 test('missing public key fails before sending a request', async () => {

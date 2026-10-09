@@ -11,7 +11,7 @@ import { loadAssessments } from '../src/ingredient-assessments.ts';
 import { CoopClient } from '../src/retailers/coop.ts';
 import { IcaClient } from '../src/retailers/ica.ts';
 import { collectReference, collectTracked } from '../src/retailers/collection.ts';
-import { configureRetailDataset, publishRetailObservations, retailSchema, type RetailDataset } from '../src/retailers/storage.ts';
+import { configureRetailDataset, publishRetailObservations, readRetailObservations, retailSchema, type RetailDataset } from '../src/retailers/storage.ts';
 import { optimizeBasket } from '../src/retailers/basket.ts';
 import { scopeKey, validateScope } from '../src/retailers/types.ts';
 import type { RetailClient, RetailerId, StoreScope } from '../src/retailers/types.ts';
@@ -123,7 +123,8 @@ async function main(){
     })():undefined;
     validateReviewedInventory(inventory,data.observations,{...data,policyVersion:inventory.dietaryPolicy?.version},id,data.scope,
       Date.now(),categoryMap,loadAssessments().records,data.nominations??null);
-    const publicationObservations=args['allow-live']?await collectTracked(client(id),data.scope,trackedIds)
+    const publicationObservations=args['allow-live']?await collectTracked(client(id),data.scope,trackedIds,25,
+      data.observations.filter(o=>trackedIds.includes(o.product.id)))
       :data.observations.filter(o=>trackedIds.includes(o.product.id));
     const observationsById=new Map(publicationObservations.map(o=>[o.product.id,o]));
     if(!trackedIds.length||trackedIds.some(id=>!observationsById.has(id)))throw new Error('Incomplete approved product observations');
@@ -148,7 +149,8 @@ async function main(){
       const meta=Object.fromEntries((await rows(db,'SELECT key,value FROM retail_meta')).map(r=>[r.key,r.value]));
       if(meta.retailer!==id||meta.reference_scope!==scopeKey(id,s))throw new Error('Reference scope differs from configured database');
       const ids=(await rows(db,'SELECT product_id FROM retail_tracked ORDER BY product_id')).map(r=>String(r.product_id));
-      budget(db,10);const obs=await collectTracked(c,s,ids);
+      const prior=await readRetailObservations(db,id,s,ids);
+      budget(db,10);const obs=await collectTracked(c,s,ids,25,prior);
       const report=await publishRetailObservations(db,id,s,obs,ids);
       save(args.output??`data/${id}-last-refresh.json`,{...report,...(db instanceof D1DatabaseClient?{rowsRead:db.rowsRead,rowsWritten:db.rowsWritten}: {})});console.log(JSON.stringify(report,null,2));
     }finally{if(db instanceof LocalDatabase)db.close();}return;

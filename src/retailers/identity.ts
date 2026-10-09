@@ -19,14 +19,17 @@ export function reviewedProductPolicy(product: Pick<RetailProduct, 'name'|'brand
   if (titleReason) return titleReason;
   const text = product.ingredientsText?.trim();
   if (!text) return null;
-  const ingredientReason = ingredientPolicy(text).blockedReason;
-  if (ingredientReason) return `product_excluded_ingredient_${ingredientReason}`;
   const normalized = text.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase();
-  if (/\b(?:ystenzym|lo[eö]pe|rennet)\b/.test(normalized)
+  const eggOnlyHenWording = /\b(?:egg|eggs|egg yolk|agg|aggula|aeg)\b/.test(normalized)
+    && !/\b(?:chicken|kyckling\w*|poultry|h[oö]n(?:s)?k[oö]tt)\b/.test(normalized);
+  const policyText = eggOnlyHenWording ? normalized.replace(/\b(?:hons|hens?)\b/g, ' ') : text;
+  const ingredientReason = ingredientPolicy(policyText).blockedReason;
+  if (ingredientReason) return `product_excluded_ingredient_${ingredientReason}`;
+  if (/\b(?:ystenzym|lope|rennet)\b/.test(normalized)
     && !/\b(?:mikrobiell\w*|microbial\w*|vegetabilisk\w*|vegetable\s+rennet)\b/.test(normalized)) {
     return 'product_excluded_uncertain_animal_source';
   }
-  const disclosedMeatReason = productPolicy({ name: text, brand: product.brand, categories: [] }, ingredientName);
+  const disclosedMeatReason = productPolicy({ name: policyText, brand: product.brand, categories: [] }, ingredientName);
   return disclosedMeatReason?.includes('meat_brand_not_permitted')
     ? 'product_excluded_ingredient_meat_brand_not_permitted' : null;
 }
@@ -53,11 +56,16 @@ export function approvedObservations(connection: ReviewedConnection, observation
 export function validateObservation(o: ProductObservation, retailer: RetailerId, scope: StoreScope): void {
   validateScope(o.scope);
   if (o.retailer !== retailer || scopeKey(retailer, o.scope) !== scopeKey(retailer, scope)
-    || !o.storeScopeVerified || !productId(o.product.id) || !o.product.name?.trim()
+    || (!o.storeScopeVerified && !(o.identityEvidence?.status === 'prior' && o.price === null && o.availability === 'unknown'))
+    || !productId(o.product.id) || !o.product.name?.trim()
     || !['available', 'unavailable', 'unknown'].includes(o.availability)
     || !Number.isFinite(Date.parse(o.checkedAt)) || !Number.isFinite(Date.parse(o.expiresAt))
     || Date.parse(o.expiresAt) <= Date.parse(o.checkedAt)
     || Date.parse(o.expiresAt) - Date.parse(o.checkedAt) > 86400000) throw new Error('invalid_product_observation');
+  if (o.identityEvidence !== undefined && (o.identityEvidence.status !== 'prior'
+    || !Number.isFinite(Date.parse(o.identityEvidence.lastVerifiedAt))
+    || Date.parse(o.identityEvidence.lastVerifiedAt) > Date.parse(o.checkedAt) + 60000
+    || o.price !== null || o.availability !== 'unknown')) throw new Error('invalid_prior_product_identity_evidence');
   if (o.price && (!Number.isSafeInteger(o.price.amountOre) || o.price.amountOre < 0
     || !['pack','kg','l'].includes(o.price.basis)
     || o.price.depositOre !== null && (!Number.isSafeInteger(o.price.depositOre) || o.price.depositOre < 0)

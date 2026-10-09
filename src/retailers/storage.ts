@@ -58,7 +58,8 @@ export async function publishRetailObservations(db: Database, retailer: Retailer
   const expiresAt=new Date(Math.min(...observations.map(o=>Date.parse(o.expiresAt)))).toISOString();
   const statements: Statement[]=[];let changed=0, priceChanges=0;
   for (const o of observations) {
-    const contentHash=hash({product:o.product,price:o.price,availability:o.availability,storeScopeVerified:o.storeScopeVerified});
+    const contentHash=hash({product:o.product,identityEvidence:o.identityEvidence??null,price:o.price,
+      availability:o.availability,storeScopeVerified:o.storeScopeVerified});
     const priceHash=hash(o.price), before=previous.get(o.product.id);
     if (before?.content_hash!==contentHash) {
       changed++; statements.push({sql:`INSERT INTO retail_products VALUES(?,?,?,?,?) ON CONFLICT(scope_key,product_id)

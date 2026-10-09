@@ -44,6 +44,17 @@ test('Coop category ID resolution maps readable ancestor paths to matcher famili
   assert.ok(categories['32361'].includes('frukt'));
   assert.ok(categories['32203'].includes('kott'));
   assert.ok(categories['21330'].includes('skafferi'));
+  const mixedCanning = coopReviewCategoryMap([
+    { categoryId: 'tuna-cans', name: 'Kött & fiskkonserver > Tonfisk' },
+    { categoryId: 'chicken-cans', name: 'Kött & fiskkonserver > Kyckling' },
+  ]);
+  assert.ok(mixedCanning['tuna-cans'].includes('fisk'));
+  assert.ok(!mixedCanning['tuna-cans'].includes('kott'));
+  assert.ok(mixedCanning['chicken-cans'].includes('kott'));
+  assert.equal(reviewedProductPolicy({ name: 'Tonfisk i olja', brand: 'Xtra',
+    categories: mixedCanning['tuna-cans'], ingredientsText: 'Tonfisk, olja' }, 'tuna'), null);
+  assert.match(reviewedProductPolicy({ name: 'Kycklingfilé', brand: 'Coop',
+    categories: mixedCanning['chicken-cans'], ingredientsText: 'Kyckling' }, 'chicken breast') ?? '', /meat_brand_not_permitted/);
 });
 
 test('prepares bounded review batches with scoped identities and no automatic approvals', () => {
@@ -81,10 +92,18 @@ test('screens disclosed product ingredients at review, publication, and quote va
   const nonAlcoholic = { ...observation.product, ingredientsText: 'Water, non alcoholic beer flavour, spices' };
   const wine = { ...observation.product, ingredientsText: 'Gurka, vitt vin, vatten' };
   const uncertainRennet = { ...observation.product, ingredientsText: 'Milk, ystenzym, salt' };
+  const swedishRennet = { ...observation.product, ingredientsText: 'Mjölk, salt, löpe' };
+  const eggMayo = { ...observation.product, brand: 'Eriks Såser', ingredientsText:
+    'Rapsolja, äggula, vitlök, vitvinsvinäger. Ägg från frigående höns.' };
+  const chickenWithEgg = { ...observation.product, ingredientsText:
+    'Kycklingkött, ägg från frigående höns.' };
   assert.equal(reviewedProductPolicy(vinegar), null);
   assert.equal(reviewedProductPolicy(nonAlcoholic), null);
   assert.match(reviewedProductPolicy(wine) ?? '', /ingredient_alcohol/);
   assert.match(reviewedProductPolicy(uncertainRennet) ?? '', /uncertain_animal_source/);
+  assert.match(reviewedProductPolicy(swedishRennet) ?? '', /uncertain_animal_source/);
+  assert.equal(reviewedProductPolicy(eggMayo), null);
+  assert.match(reviewedProductPolicy(chickenWithEgg) ?? '', /meat_brand_not_permitted/);
 
   const matched = { ingredientId: ingredientId('cucumber'), name: 'cucumber', foodId: 'cucumber',
     status: 'matched' as const, mainProductId: wine.id,

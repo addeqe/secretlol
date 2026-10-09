@@ -30,6 +30,23 @@ export type CoopClientOptions = {
   now?: () => Date;
 };
 
+/** A complete, well-formed by-ID response omitted these requested products. */
+export class CoopMissingProductsError extends Error {
+  readonly retailer = 'coop' as const;
+  readonly requestedProductIds: string[];
+  readonly missingProductIds: string[];
+  readonly observations: ProductObservation[];
+  readonly scope: StoreScope;
+  constructor(scope: StoreScope, requestedProductIds: string[], missingProductIds: string[], observations: ProductObservation[]) {
+    super('coop_requested_products_missing');
+    this.name = 'CoopMissingProductsError';
+    this.scope = { ...scope };
+    this.requestedProductIds = [...requestedProductIds];
+    this.missingProductIds = [...missingProductIds];
+    this.observations = [...observations];
+  }
+}
+
 const unsupportedCapabilities: RetailCapabilities = {
   stores: true,
   categories: true,
@@ -38,8 +55,8 @@ const unsupportedCapabilities: RetailCapabilities = {
   batchLookup: true,
   verifiedStorePricing: true,
   notes: [
-    'Postal-code lookup returns the first page of nearby pickup-capable stores. Delivery store resolution is not verified.',
-    'Category products and EAN details use Coop personalization endpoints with an explicit store context; this verifies online pickup-store pricing only.',
+    'Postal-code lookup returns the first page of nearby pickup-capable stores and may include lockers whose physical pickup point differs from the fulfilment store.',
+    'Category products and EAN details use the fulfilment store context; prices are online pickup prices for that pricing store, not physical pickup-point shelf prices.',
     'Delivery and delivery-slot price scope are not exposed by the verified public frontend request.',
     'Member-only and multi-buy offers are not selected as public prices; ambiguous offers fall back to the regular public price.',
   ],
@@ -57,7 +74,7 @@ export class CoopClient implements RetailClient {
   private readonly now: () => Date;
 
   constructor(options: CoopClientOptions = {}) {
-    this.transport = options.transport ?? fetch;
+    this.transport = options.transport ?? ((input, init) => globalThis.fetch(input, init));
     this.publicSubscriptionKey = options.publicSubscriptionKey;
     this.personalizationSubscriptionKey = options.personalizationSubscriptionKey ?? options.publicSubscriptionKey;
     this.now = options.now ?? (() => new Date());
@@ -126,13 +143,18 @@ export class CoopClient implements RetailClient {
     const payload = await this.personalizationRequest('/search/entities/by-id', scope.storeId, uniqueIds);
     const result = searchItems(payload);
     if (!result) throw new Error('coop_unexpected_products_response');
-    const byId = new Map(result.items.map(item => [firstString(item, ['id', 'code', 'productId', 'ean']), item] as const));
-    if (result.count !== uniqueIds.length || byId.size !== result.items.length
-      || uniqueIds.some(id => !byId.has(id)) || result.items.length !== uniqueIds.length) {
+    const returnedIds = result.items.map(item => firstString(item, ['id', 'code', 'productId', 'ean']));
+    const requested = new Set(uniqueIds), returned = new Set(returnedIds);
+    if (result.count !== result.items.length || returnedIds.some(id => id === null)
+      || returned.size !== result.items.length || returnedIds.some(id => !requested.has(id!))) {
       throw new Error('coop_incomplete_products_response');
     }
     const checkedAt = this.now();
-    return uniqueIds.map(id => parseCoopProduct(byId.get(id), scope, checkedAt, true));
+    const byId = new Map(result.items.map((item, index) => [returnedIds[index]!, item] as const));
+    const found = [...byId.values()].map(item => parseCoopProduct(item, scope, checkedAt, true));
+    const missing = uniqueIds.filter(id => !byId.has(id));
+    if (missing.length) throw new CoopMissingProductsError(scope, uniqueIds, missing, found);
+    return uniqueIds.map(id => found.find(o => o.product.id === id)!);
   }
 
   private async request(path: string): Promise<unknown> {
@@ -195,6 +217,7 @@ function parseStore(input: unknown): RetailStore | null {
   const id = firstString(input, ['storeId', 'code', 'id']);
   const name = firstString(input, ['displayName', 'name']);
   if (!id || !name) return null;
+  const pointId = firstString(input, ['pickupPointId', 'pointOfServiceId', 'code', 'id']);
   const pickupModes = Array.isArray(input.pickupDeliveryModes) ? input.pickupDeliveryModes : [];
   if (pickupModes.length === 0) return null;
   const address = record(input.address);
@@ -205,8 +228,10 @@ function parseStore(input: unknown): RetailStore | null {
   return {
     retailer: 'coop',
     id,
+    pricingStoreId: id,
     name,
     channels: ['pickup'],
+    ...(pointId && pointId !== id ? { pickupPointId: pointId } : {}),
     ...(postal ? { postalCode: postal } : {}),
     ...(addressText ? { address: addressText } : {}),
     ...(firstString(input, ['url']) ? { url: firstString(input, ['url'])! } : {}),

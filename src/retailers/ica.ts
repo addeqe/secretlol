@@ -110,7 +110,7 @@ export class IcaClient implements RetailClient {
   private readonly transport: RetailTransport;
 
   constructor(options: { transport?: RetailTransport } = {}) {
-    this.transport = options.transport ?? fetch;
+    this.transport = options.transport ?? ((input, init) => globalThis.fetch(input, init));
   }
 
   async stores(postalCode: string): Promise<RetailStore[]> {

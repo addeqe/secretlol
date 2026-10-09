@@ -3,7 +3,11 @@ export type SalesChannel = 'pickup' | 'delivery';
 export type QuantityUnit = 'g' | 'ml' | 'piece';
 export type StoreScope = { storeId: string; channel: SalesChannel; slotId?: string };
 export type RetailStore = { retailer: RetailerId; id: string; name: string;
-  channels: SalesChannel[]; postalCode?: string; address?: string; url?: string };
+  channels: SalesChannel[]; postalCode?: string; address?: string; url?: string;
+  /** Coop pickup location identity when distinct from the store used to price online orders. */
+  pickupPointId?: string;
+  /** Store whose online catalogue/prices apply. `id` remains this value for compatibility. */
+  pricingStoreId?: string };
 export type RetailCategory = { id: string; name: string; children: RetailCategory[] };
 export type RetailPack = { quantity: number; unit: QuantityUnit; approximate: boolean; drainedGrams?: number | null };
 export type RetailProduct = { id: string; ean: string | null; name: string; brand: string | null;
@@ -15,7 +19,9 @@ export type RetailPrice = { amountOre: number; basis: 'pack' | 'kg' | 'l';
 export type ProductObservation = { retailer: RetailerId; scope: StoreScope;
   product: RetailProduct; price: RetailPrice | null;
   availability: 'available' | 'unavailable' | 'unknown';
-  checkedAt: string; expiresAt: string; storeScopeVerified: boolean };
+  checkedAt: string; expiresAt: string; storeScopeVerified: boolean;
+  /** Product details retained from an earlier successful lookup after confirmed disappearance. */
+  identityEvidence?: { status: 'prior'; lastVerifiedAt: string } };
 export type RetailPage = { products: ProductObservation[]; nextCursor: string | null;
   total: number | null; scope: StoreScope; categoryId: string };
 export type RetailCapabilities = { stores: boolean; categories: boolean; browse: boolean;

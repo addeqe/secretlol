@@ -19,6 +19,17 @@
       "displayName": "Unsupported outlet",
       "address": { "postalCode": "11455", "town": "Stockholm" },
       "pickupDeliveryModes": []
+    },
+    {
+      "storeId": "252700",
+      "code": "990326",
+      "displayName": "Coop Träkvista Alltid Öppet",
+      "address": {
+        "line1": "Tegelbruksvägen 1",
+        "postalCode": "179 75",
+        "town": "Ekerö"
+      },
+      "pickupDeliveryModes": [{ "code": "pickup_from_lockers" }]
     }
   ]
 }

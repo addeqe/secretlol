@@ -51,9 +51,13 @@ export function coopReviewCategoryMap(categories: RetailCategoryLabel[]): Retail
     [/\b(?:m[jy]ol|socker|pasta|ris|gryner|baljv[aä]xter|konserv|senap|s[aå]s|krydda|bakning|baking|mj[oö]l|olja|vin[aä]ger|ketchup|sylt|honung|sirap|choklad|kakao|n[oö]tter|fr[oö]|br[oö]d|spannm[aå]l|skafferi|kex|kn[aä]ckebr[oö]d|nudlar|buljong)\b/, 'skafferi'],
   ];
   for (const category of categories) {
-    const normalized = category.name.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase();
+    const normalized = category.name.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
+      // Coop's shared canning parent contains both meat and fish. Its word
+      // "kött" alone must not classify fish cans as meat products.
+      .replace(/\bkott\s*(?:&|och)\s*fiskkonserver\b/g, ' ');
     const families = rules.filter(([pattern]) => pattern.test(normalized)).map(([, family]) => family);
-    if (families.length) map[category.categoryId] = [...new Set([...families, category.name])];
+    const safeLabel = category.name.replace(/kött\s*(?:&|och)\s*fiskkonserver/giu, 'fiskkonserver');
+    if (families.length) map[category.categoryId] = [...new Set([...families, safeLabel])];
   }
   return map;
 }
@@ -274,9 +278,9 @@ function validateManualReviewNominations(nominations: ManualReviewNominations | 
       if (!entry) throw new Error('manual_nomination_product_not_in_scan');
       if (reviewedProductPolicy({ name: entry.name, brand: entry.brand, categories: entry.categories,
         ingredientsText: typeof entry.raw.ingredientsText === 'string' ? entry.raw.ingredientsText : null }, nomination.name)) {
-        throw new Error('manual_nomination_product_policy_excluded');
+        throw new Error(`manual_nomination_product_policy_excluded:${nomination.name}:${productId}`);
       }
-      if (reviewAttributeExclusion(nomination.name, entry)) throw new Error('manual_nomination_attribute_mismatch');
+      if (reviewAttributeExclusion(nomination.name, entry)) throw new Error(`manual_nomination_attribute_mismatch:${nomination.name}:${productId}`);
     }
   }
   return nominations;
