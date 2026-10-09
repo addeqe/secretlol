@@ -14,11 +14,15 @@ export class LocalProductResolver {
   constructor(client:RetailClient,cache:ObservationCache){this.client=client;this.cache=cache;}
   async resolve(scope:StoreScope,connections:ReviewedConnection[],now=Date.now()){
     validateScope(scope);
-    const ids=[...new Set(connections.flatMap(c=>c.approvedProducts.map(p=>p.productId)))].sort();
+    const idSet=new Set<string>();
+    for(const connection of connections)for(const product of connection.approvedProducts)idSet.add(product.productId);
+    const ids=[...idSet].sort();
     if(ids.length>400)throw new Error('local_lookup_product_budget');
+    const encodedScope=scopeKey(this.client.retailer,scope);
+    const keys=ids.map(id=>JSON.stringify([encodedScope,id]));
     const observations:ProductObservation[]=[],missing:string[]=[];
-    const bundled=this.cache.getMany?await this.cache.getMany(ids.map(id=>this.key(scope,id))):null;
-    for(const id of ids){const o=bundled?bundled.get(this.key(scope,id)):await this.cache.get(this.key(scope,id));
+    const bundled=this.cache.getMany?await this.cache.getMany(keys):null;
+    for(let i=0;i<ids.length;i++){const id=ids[i]!,key=keys[i]!;const o=bundled?bundled.get(key):await this.cache.get(key);
       if(o){try{validateObservation(o,this.client.retailer,scope);}catch{missing.push(id);continue;}}
       if(o&&o.product.id===id&&Date.parse(o.expiresAt)>now&&Date.parse(o.checkedAt)<=now+60000&&now-Date.parse(o.checkedAt)<1800000)observations.push(o);else missing.push(id);}
     if(missing.length){
@@ -26,7 +30,7 @@ export class LocalProductResolver {
       const groups=[];for(let i=0;i<missing.length;i+=(this.client.capabilities.batchLookup?25:1))groups.push(missing.slice(i,i+(this.client.capabilities.batchLookup?25:1)));
       if(groups.length>40)throw new Error('local_lookup_requires_chunks');
       for(const group of groups){
-        const key=JSON.stringify([scopeKey(this.client.retailer,scope),group]);let call=this.pending.get(key);
+        const key=JSON.stringify([encodedScope,group]);let call=this.pending.get(key);
         if(!call){call=this.client.products(scope,group);this.pending.set(key,call);}
         let found:ProductObservation[];try{found=await call;}finally{if(this.pending.get(key)===call)this.pending.delete(key);}
         if(found.length!==group.length||new Set(found.map(o=>o.product.id)).size!==group.length||found.some(o=>!group.includes(o.product.id)))throw new Error('incomplete_local_lookup');
@@ -36,12 +40,23 @@ export class LocalProductResolver {
           const expiry=Math.min(Date.parse(o.expiresAt),Date.parse(o.checkedAt)+1800000,
             o.price?.validUntil?Date.parse(o.price.validUntil):Infinity);
           if(!Number.isFinite(expiry)||expiry<=now||Date.parse(o.checkedAt)>now+60000)throw new Error('invalid_local_observation');
-          const cached={...o,expiresAt:new Date(expiry).toISOString()};if(!this.cache.setMany)await this.cache.set(this.key(scope,o.product.id),cached);observations.push(cached);
+          const cached={...o,expiresAt:new Date(expiry).toISOString()};if(!this.cache.setMany)await this.cache.set(JSON.stringify([encodedScope,o.product.id]),cached);observations.push(cached);
         }
       }
-      if(this.cache.setMany)await this.cache.setMany(new Map(observations.map(o=>[this.key(scope,o.product.id),o])));
+      if(this.cache.setMany)await this.cache.setMany(new Map(observations.map(o=>[JSON.stringify([encodedScope,o.product.id]),o])));
     }
-    return {observations,eligible:new Map(connections.map(c=>[c.ingredientId,approvedObservations(c,observations,this.client.retailer,scope,now)]))};
+    // Each review can approve at most three IDs. Restrict the validator's input to
+    // those observations while retaining their catalogue order and all policy checks.
+    const observationsById=new Map<string,ProductObservation[]>(),observationIndexes=new Map<ProductObservation,number>();
+    for(let i=0;i<observations.length;i++){const observation=observations[i]!;observationIndexes.set(observation,i);const list=observationsById.get(observation.product.id);if(list)list.push(observation);else observationsById.set(observation.product.id,[observation]);}
+    const eligible=new Map<string,ProductObservation[]>();
+    for(const connection of connections){
+      const candidates:ProductObservation[]=[];
+      const approvedIds=new Set(connection.approvedProducts.map(product=>product.productId));
+      for(const productId of approvedIds){const found=observationsById.get(productId);if(found)candidates.push(...found);}
+      candidates.sort((a,b)=>observationIndexes.get(a)!-observationIndexes.get(b)!);
+      eligible.set(connection.ingredientId,approvedObservations(connection,candidates,this.client.retailer,scope,now));
+    }
+    return {observations,eligible};
   }
-  private key(scope:StoreScope,id:string){return JSON.stringify([scopeKey(this.client.retailer,scope),id]);}
 }

@@ -38,6 +38,7 @@ test('memoized identity and dietary checks invalidate when reviewed product evid
   assert.equal(reviewedProductPolicy(policyProduct), null);
   policyProduct.ingredientsText = 'Water, white wine';
   assert.match(reviewedProductPolicy(policyProduct) ?? '', /alcohol/);
+  assert.match(reviewedProductPolicy({ ...policyProduct, categories: [...policyProduct.categories] }) ?? '', /alcohol/);
   policyProduct.ingredientsText = 'Water';
   policyProduct.categories.push('Kött');
   assert.match(reviewedProductPolicy(policyProduct, 'beef') ?? '', /meat_brand/);

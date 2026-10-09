@@ -11,6 +11,7 @@ import { refreshIngredientLinks } from '../src/ingredient-publish.ts';
 import { catalogStorageSchema } from '../src/catalog-storage.ts';
 import { ingredientStorageSchema } from '../src/ingredient-storage.ts';
 import { mealSchema } from '../src/meal-import.ts';
+import { quoteProjectionSql } from '../src/meal-quote-projection.ts';
 import { retailSchema, configureRetailDataset, publishRetailObservations } from '../src/retailers/storage.ts';
 import { productIdentity, type ReviewedConnection } from '../src/retailers/identity.ts';
 import { DIETARY_POLICY_VERSION } from '../src/dietary-policy.ts';
@@ -63,6 +64,7 @@ for(const [key,value] of Object.entries({active_dataset:dataset,ready:dataset,ma
 const document={source:{RecipeId:'1',Name:'Runtime milk recipe',RecipeServings:2},ingredients:[{ingredient_index:0,ingredient_original:'milk',unit:'milliliter',measured_quantity:'500'},{ingredient_index:1,ingredient_original:'water',unit:'cup',measured_quantity:'1'}],quality:{state:'consistent'},filters:[{filter_id:1,state:'yes'}],profile:{nutrition_metrics:{nutrients_per_serving:{Calories:100}}},reviews:[{ReviewId:1,Review:'Runtime fixture'}]};
 mealSql+=`INSERT INTO meal_recipes VALUES(${[dataset,1,'Runtime milk recipe',JSON.stringify(['milk','water']),JSON.stringify({id:1,name:'Runtime milk recipe'}),JSON.stringify(document),'fixture'].map(quote).join(',')});\n`;
 mealSql+=`INSERT INTO meal_filter_sets VALUES(${[dataset,'1:yes','[1]'].map(quote).join(',')});\n`;
+mealSql+=`INSERT OR REPLACE INTO meal_quote_projections SELECT r.dataset_id,r.recipe_id,r.content_hash,${quoteProjectionSql} FROM meal_recipes r;\n`;
 const mealSeed=resolve(folder,'meal-seed.sql');writeFileSync(mealSeed,mealSql);
 const seededMeal=spawnSync(process.execPath,[cli,'d1','execute','MEAL_DB','--local','--config',config,'--persist-to',folder,'--file',mealSeed],{env,encoding:'utf8'});if(seededMeal.status!==0)throw new Error('Local meal database test setup failed: '+seededMeal.stderr);
 // Seed the retailer DB from the explicitly synthetic fixture, reshaped only to

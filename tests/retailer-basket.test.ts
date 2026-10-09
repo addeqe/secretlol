@@ -41,6 +41,221 @@ test('minimizes whole checkout cost instead of choosing the lowest unit price', 
   assert.equal(result.consumedCostOre, 100);
 });
 
+test('closed-form isolated products preserve pack and variable-weight checkout arithmetic', () => {
+  const packed = optimizeBasket(request([demand('flour', 550, ['pack'])], [observed('pack', 250, 200, { depositOre: 10 })]));
+  assert.equal(packed.complete, true);
+  assert.equal(packed.optimizationComplete, true);
+  assert.equal(packed.statesExplored, 1);
+  assert.equal(packed.workExplored, 2);
+  assert.equal(packed.purchaseCostOre, 630);
+  assert.equal(packed.consumedCostOre, 440);
+
+  const weighted = optimizeBasket(request([demand('flour', 250, ['weighted'])], [observed('weighted', 0, 300, { basis: 'kg', depositOre: 0 })]));
+  assert.equal(weighted.complete, true);
+  assert.equal(weighted.statesExplored, 1);
+  assert.equal(weighted.purchaseCostOre, 75);
+  assert.equal(weighted.consumedCostOre, 75);
+});
+
+test('closed-form same-size pack results match exhaustive checkout enumeration', () => {
+  for (const [quantity, unitCosts] of [[1e-9, [100, 120, 150]], [1, [100, 120, 150]],
+    [250, [100, 120, 150]], [500, [100, 120, 150]], [501, [130, 100, 150]], [997, [130, 100, 150]],
+    [1000, [130, 100, 150]]] as Array<[number, number[]]>) {
+    const ids = ['a', 'b', 'c'], options = ids.map((id, index) => observed(id, 500, unitCosts[index], { depositOre: 0 }));
+    const minimum = Math.min(...unitCosts), cheapestIndex = unitCosts.indexOf(minimum);
+    assert.equal(unitCosts.lastIndexOf(minimum), cheapestIndex, 'scenario must have one unique cheapest pack');
+    const maxPacks = Math.ceil(quantity / 500);
+    let exhaustiveCost = Number.POSITIVE_INFINITY;
+    for (let a = 0; a <= maxPacks; a++) for (let b = 0; b <= maxPacks; b++) for (let c = 0; c <= maxPacks; c++) {
+      if ((a + b + c) * 500 < quantity) continue;
+      exhaustiveCost = Math.min(exhaustiveCost, a * unitCosts[0] + b * unitCosts[1] + c * unitCosts[2]);
+    }
+    const result = optimizeBasket(request([demand('flour', quantity, ids)], options));
+    const expectedPacks = Math.ceil(quantity / 500);
+    assert.equal(result.complete, true);
+    assert.equal(result.optimizationComplete, true);
+    assert.equal(result.lines.length, 1);
+    assert.equal(result.lines[0].productId, ids[cheapestIndex]);
+    assert.equal(result.lines[0].packs, expectedPacks);
+    assert.equal(result.purchaseCostOre, exhaustiveCost);
+    assert.equal(result.consumedCostOre, Math.round(unitCosts[cheapestIndex] * quantity / 500));
+  }
+});
+
+test('single-group mixed pack sizes match exhaustive positive-price cover enumeration', () => {
+  const scenarios = [
+    { quantity: 11, packs: [[4, 7], [9, 13]] },
+    { quantity: 17, packs: [[3, 8], [8, 15], [13, 22]] },
+    { quantity: 30, packs: [[7, 9], [11, 12], [16, 18]] },
+    { quantity: 6, packs: [[4, 3], [10, 6]] }, // equal-cost alternatives use exact solver tie rules
+  ];
+  for (const scenario of scenarios) {
+    const ids = scenario.packs.map((_, index) => String.fromCharCode(97 + index));
+    const options = scenario.packs.map(([quantity, price], index) => observed(ids[index], quantity, price));
+    const maxima = scenario.packs.map(([quantity]) => Math.ceil(scenario.quantity / quantity));
+    const fixedOrder = ids.slice().sort((a, b) => {
+      const ai = ids.indexOf(a), bi = ids.indexOf(b);
+      return scenario.packs[ai][1] / scenario.packs[ai][0] - scenario.packs[bi][1] / scenario.packs[bi][0] || a.localeCompare(b);
+    });
+    let best = Number.POSITIVE_INFINITY;
+    let bestChoices: number[] | null = null;
+    const visit = (index: number, capacity: number, cost: number, choices: number[]) => {
+      if (index === scenario.packs.length) {
+        if (capacity < scenario.quantity) return;
+        const key = fixedOrder.map(id => `${id}:${choices[ids.indexOf(id)]}`).join('|');
+        const bestKey = bestChoices && fixedOrder.map(id => `${id}:${bestChoices![ids.indexOf(id)]}`).join('|');
+        if (cost < best || cost === best && (bestKey == null || key < bestKey)) { best = cost; bestChoices = choices; }
+        return;
+      }
+      for (let count = 0; count <= maxima[index]; count++) visit(index + 1,
+        capacity + count * scenario.packs[index][0], cost + count * scenario.packs[index][1], [...choices, count]);
+    };
+    visit(0, 0, 0, []);
+    const result = optimizeBasket(request([demand('flour', scenario.quantity, ids)], options));
+    assert.equal(result.complete, true, JSON.stringify(scenario));
+    assert.equal(result.optimizationComplete, true, JSON.stringify(scenario));
+    assert.equal(result.purchaseCostOre, best, JSON.stringify(scenario));
+    assert.equal(result.lines.reduce((sum, line) => sum + line.purchaseCostOre, 0), best);
+    assert.equal(result.lines.reduce((sum, line) => sum + line.quantity, 0), scenario.quantity);
+    if (scenario.quantity === 30) assert.deepEqual(result.lines.map(line => [line.productId, line.packs]), [['b', 3]],
+      'retain the general solver’s deterministic incumbent when equal-cost covers are pruned');
+  }
+});
+
+test('single-group mixed-pack cover respects state and work bounds', () => {
+  const options = [observed('small', 4, 7), observed('large', 9, 13)];
+  const bounded = optimizeBasket(request([demand('flour', 11, ['small', 'large'])], options, { maxStates: 1 }));
+  assert.equal(bounded.complete, false);
+  assert.equal(bounded.optimizationComplete, false);
+  assert.ok(bounded.unresolved.some(item => item.reason === 'optimization_state_bound_exceeded'));
+
+  const outOfWork = optimizeBasket(request([demand('flour', 11, ['small', 'large'])], options, { maxWork: 2 }));
+  assert.equal(outOfWork.complete, false);
+  assert.equal(outOfWork.optimizationComplete, false);
+  assert.ok(outOfWork.unresolved.some(item => item.reason === 'optimization_work_bound_exceeded'));
+});
+
+test('single-group three-pack cover avoids per-combination flow while proving the optimum', () => {
+  const result = optimizeBasket(request([demand('flour', 1000, ['small', 'medium', 'large'])], [
+    observed('small', 10, 100), observed('medium', 11, 105), observed('large', 12, 115),
+  ], { maxStates: 50_000, maxWork: 200_000 }));
+  assert.equal(result.complete, true);
+  assert.equal(result.optimizationComplete, true);
+  assert.equal(result.purchaseCostOre, 9_550);
+  assert.deepEqual(result.lines.map(line => [line.productId, line.packs]), [['medium', 90], ['small', 1]]);
+  assert.ok(result.statesExplored < 8_000);
+  assert.ok(result.workExplored < 20_000);
+});
+
+test('closed-form selection runs only after conditional and drained-weight options are excluded', () => {
+  const drained = observed('drained', 500, 1);
+  drained.product.pack!.drainedGrams = 300;
+  const result = optimizeBasket(request([demand('flour', 100, ['member', 'drained', 'safe'])], [
+    observed('member', 500, 1, { memberOnly: true }), drained, observed('safe', 500, 100),
+  ]));
+  assert.equal(result.complete, true);
+  assert.equal(result.optimizationComplete, true);
+  assert.equal(result.statesExplored, 1);
+  assert.equal(result.lines[0].productId, 'safe');
+  assert.equal(result.purchaseCostOre, 100);
+});
+
+test('equal-price and zero-price pack alternatives retain bounded exact-search semantics', () => {
+  for (const price of [0, 100]) {
+    const exact = optimizeBasket(request([demand('flour', 100, ['a', 'b'])], [
+      observed('a', 100, price), observed('b', 100, price),
+    ]));
+    assert.equal(exact.complete, true);
+    assert.equal(exact.optimizationComplete, true);
+    assert.equal(exact.lines[0].productId, 'a'); // Preserve the first incumbent from the current search order.
+
+    const result = optimizeBasket(request([demand('flour', 100, ['a', 'b'])], [
+      observed('a', 100, price), observed('b', 100, price),
+    ], { maxStates: 1 }));
+    assert.equal(result.optimizationComplete, false);
+    assert.equal(result.complete, false);
+    assert.equal(result.purchaseCostOre, null);
+    assert.equal(result.statesExplored, 1);
+    assert.ok(result.unresolved.some(item => item.reason === 'optimization_state_bound_exceeded'));
+  }
+});
+
+test('closed-form solving respects the shared state and work budgets', () => {
+  const twoGroups = optimizeBasket(request([
+    demand('flour', 100, ['one']), demand('rice', 100, ['two'], { name: 'rice' }),
+  ], [observed('one', 100, 100), observed('two', 100, 100)], { maxStates: 1 }));
+  assert.equal(twoGroups.statesExplored, 1);
+  assert.equal(twoGroups.optimizationComplete, false);
+  assert.ok(twoGroups.unresolved.some(item => item.reason === 'optimization_state_bound_exceeded'));
+
+  const outOfWork = optimizeBasket(request([demand('flour', 100, ['pack'])], [observed('pack', 100, 100)], { maxWork: 1 }));
+  assert.equal(outOfWork.workExplored, 1);
+  assert.equal(outOfWork.optimizationComplete, false);
+  assert.ok(outOfWork.unresolved.some(item => item.reason === 'optimization_work_bound_exceeded'));
+});
+
+test('forced single-product precision-separated groups bypass flow while preserving pack totals', () => {
+  const demands = [demand('flour-00',1e16,['shared']),
+    ...Array.from({length:10},(_,index)=>demand(`flour-${String(index+1).padStart(2,'0')}`,1,['shared']))];
+  const result = optimizeBasket(request(demands,[observed('shared',2e16,4000)],{maxWork:20}));
+  assert.equal(result.complete,true);
+  assert.equal(result.optimizationComplete,true);
+  assert.equal(result.statesExplored,1);
+  assert.equal(result.workExplored,13);
+  assert.equal(result.lines.length,1);
+  assert.equal(result.lines[0].packs,1);
+  assert.equal(result.lines[0].quantity,1e16,'line accumulation retains the solver’s ordered IEEE-754 behavior');
+  assert.equal(result.purchaseCostOre,4000);
+  assert.equal(result.consumedCostOre,2000);
+
+  const bounded = optimizeBasket(request(demands,[observed('shared',2e16,4000)],{maxWork:2}));
+  assert.equal(bounded.optimizationComplete,false);
+  assert.equal(bounded.complete,false);
+  assert.equal(bounded.workExplored,2);
+  assert.ok(bounded.unresolved.some(item=>item.reason==='optimization_work_bound_exceeded'));
+});
+
+test('forced weighted product across precision-separated groups preserves weighted rounding', () => {
+  const demands = [demand('flour-00',1e16,['weighted']),demand('flour-01',1,['weighted']),demand('flour-02',2,['weighted'])];
+  const result = optimizeBasket(request(demands,[observed('weighted',0,100,{basis:'kg',depositOre:0})],{maxWork:10}));
+  assert.equal(result.complete,true);
+  assert.equal(result.optimizationComplete,true);
+  assert.equal(result.statesExplored,1);
+  assert.equal(result.lines.length,1);
+  assert.equal(result.lines[0].packs,null);
+  assert.equal(result.lines[0].quantity,1e16+4,
+    'compressed group order, not raw demand order, determines displayed quantity accumulation');
+  assert.equal(result.purchaseCostOre,1_000_000_000_000_000);
+  assert.equal(result.consumedCostOre,1_000_000_000_000_000);
+});
+
+test('closed-form arithmetic falls back when package counts or checkout totals are unsafe', () => {
+  for (const [quantity, packQuantity, price, depositOre] of [
+    [1e308, 1e-100, 100, 0], // quotient overflows
+    [1e308, 1, 100, 0], // finite but not a safe integer pack count
+    [100, 100, Number.MAX_SAFE_INTEGER, 1], // purchase total is outside safe integer range
+  ]) {
+    const result = optimizeBasket(request([demand('flour', quantity, ['edge'])], [
+      observed('edge', packQuantity, price, { depositOre }),
+    ], { maxWork: 50 }));
+    if (quantity > 1e200) {
+      assert.equal(result.complete, false);
+      assert.equal(result.optimizationComplete, false);
+      assert.equal(result.purchaseCostOre, null);
+      assert.ok(result.unresolved.some(item => item.reason === 'optimization_work_bound_exceeded'
+        || item.reason === 'optimization_state_bound_exceeded'));
+    } else assert.ok(result.workExplored > 2, 'unsafe checkout arithmetic must fall back to the existing search');
+    assert.ok(result.lines.every(line => Number.isFinite(line.purchaseCostOre)));
+  }
+
+  const weighted = optimizeBasket(request([demand('flour', 1e308, ['weighted'])], [
+    observed('weighted', 0, 1_000_000, { basis: 'kg', depositOre: 0 }),
+  ]));
+  assert.equal(weighted.complete, false);
+  assert.equal(weighted.purchaseCostOre, null);
+  assert.ok(weighted.workExplored > 2, 'unsafe weighted checkout arithmetic must fall back to the existing search');
+});
+
 test('does not equate canned net weight with drained recipe weight',()=>{
   const can=observed('can',380,1500);can.product.pack!.drainedGrams=230;
   const result=optimizeBasket(request([demand('beans',100,['can'],{name:'beans'})],[can]));
@@ -211,7 +426,7 @@ test('honors reviewed approved-ID intersections and strict dietary compatibility
 
 test('signals when the exact-search bound prevents proving the optimum', () => {
   const result = optimizeBasket(request([demand('flour', 100, ['a', 'b'])], [
-    observed('a', 100, 100), observed('b', 100, 50),
+    observed('a', 100, 100), observed('b', 200, 50),
   ], { maxStates: 1 }));
   assert.equal(result.optimizationComplete, false);
   assert.equal(result.complete, false);
@@ -233,7 +448,7 @@ test('optimizes many disconnected ingredients as small exact components', () => 
 test('reports a feasible but unproven result for a genuinely coupled stress component', () => {
   const ids = Array.from({ length: 5 }, (_, i) => `shared-${i}`);
   const demands = Array.from({ length: 8 }, (_, i) => demand(`ingredient-${i}`, 100, ids));
-  const observations = ids.map((id, i) => observed(id, 100, 100 + i * 25));
+  const observations = ids.map((id, i) => observed(id, 100 + i * 10, 100 + i * 25));
   const result = optimizeBasket(request(demands, observations, { maxStates: 25 }));
   assert.equal(result.complete, true);
   assert.equal(result.optimizationComplete, false);
@@ -244,13 +459,13 @@ test('reports a feasible but unproven result for a genuinely coupled stress comp
 
 test('keeps an incumbent basket complete when the work budget prevents proving optimality', () => {
   const result = optimizeBasket(request([demand('flour', 100, ['a', 'b'])], [
-    observed('a', 100, 100), observed('b', 100, 90),
-  ], { maxWork: 41 }));
+    observed('a', 100, 100), observed('b', 200, 90),
+  ], { maxWork: 4 }));
   assert.equal(result.complete, true);
   assert.equal(result.optimizationComplete, false);
   assert.equal(result.purchaseCostOre, result.knownPurchaseCostOre);
-  assert.equal(result.knownPurchaseCostOre, 100);
-  assert.equal(result.workExplored, 41);
+  assert.equal(result.knownPurchaseCostOre, 90);
+  assert.equal(result.workExplored, 4);
   assert.ok(result.unresolved.some(item => item.reason === 'optimization_work_bound_exceeded'));
 });
 

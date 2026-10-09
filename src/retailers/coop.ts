@@ -123,7 +123,7 @@ export class CoopClient implements RetailClient {
     const result = searchItems(payload);
     if (!result) throw new Error('coop_unexpected_category_products');
     const checkedAt = this.now();
-    const products = result.items.map(item => parseCoopProduct(item, scope, checkedAt, true));
+    const products = result.items.map(item => parseCoopProductValidated(item, scope, checkedAt, true));
     const nextOffset = offset + result.items.length;
     if (result.items.length === 0 && offset < result.count) throw new Error('coop_empty_nonterminal_category_page');
     return {
@@ -143,18 +143,20 @@ export class CoopClient implements RetailClient {
     const payload = await this.personalizationRequest('/search/entities/by-id', scope.storeId, uniqueIds);
     const result = searchItems(payload);
     if (!result) throw new Error('coop_unexpected_products_response');
-    const returnedIds = result.items.map(item => firstString(item, ['id', 'code', 'productId', 'ean']));
-    const requested = new Set(uniqueIds), returned = new Set(returnedIds);
-    if (result.count !== result.items.length || returnedIds.some(id => id === null)
-      || returned.size !== result.items.length || returnedIds.some(id => !requested.has(id!))) {
-      throw new Error('coop_incomplete_products_response');
+    if (result.count !== result.items.length) throw new Error('coop_incomplete_products_response');
+    const requested = new Set(uniqueIds), rawById = new Map<string, Record<string, unknown>>();
+    for (const item of result.items) {
+      const id = firstString(item, ['id', 'code', 'productId', 'ean']);
+      if (!id || !requested.has(id) || rawById.has(id)) throw new Error('coop_incomplete_products_response');
+      rawById.set(id, item);
     }
     const checkedAt = this.now();
-    const byId = new Map(result.items.map((item, index) => [returnedIds[index]!, item] as const));
-    const found = [...byId.values()].map(item => parseCoopProduct(item, scope, checkedAt, true));
-    const missing = uniqueIds.filter(id => !byId.has(id));
+    const foundById = new Map<string, ProductObservation>();
+    for (const [id, item] of rawById) foundById.set(id, parseCoopProductValidated(item, scope, checkedAt, true));
+    const missing = uniqueIds.filter(id => !foundById.has(id));
+    const found = [...foundById.values()];
     if (missing.length) throw new CoopMissingProductsError(scope, uniqueIds, missing, found);
-    return uniqueIds.map(id => found.find(o => o.product.id === id)!);
+    return uniqueIds.map(id => foundById.get(id)!);
   }
 
   private async request(path: string): Promise<unknown> {
@@ -247,6 +249,15 @@ export function parseCoopProduct(
   storeScopeVerified: boolean,
 ): ProductObservation {
   validateScope(scope);
+  return parseCoopProductValidated(payload, scope, checkedAt, storeScopeVerified);
+}
+
+function parseCoopProductValidated(
+  payload: unknown,
+  scope: StoreScope,
+  checkedAt: Date,
+  storeScopeVerified: boolean,
+): ProductObservation {
   const raw = productRecord(payload);
   if (!raw) throw new Error('coop_unexpected_product');
 
@@ -263,6 +274,7 @@ export function parseCoopProduct(
   const drained=quantityAndUnit(drainedText);
   const drainedGrams=positiveNumber(raw.drainedWeightGrams)??(drained?.unit==='g'?drained.quantity:null);
   if(pack&&drainedGrams!==null)pack.drainedGrams=drainedGrams;
+  const url=firstString(raw,['url','productUrl']),imageUrl=firstString(raw,['imageUrl','image']);
   const product: RetailProduct = {
     id,
     ean,
@@ -271,8 +283,8 @@ export function parseCoopProduct(
     categories: parseCategories(raw),
     pack,
     ingredientsText: firstString(raw, ['listOfIngredients', 'ingredientsText', 'ingredients']),
-    ...(firstString(raw, ['url', 'productUrl']) ? { url: firstString(raw, ['url', 'productUrl'])! } : {}),
-    ...(firstString(raw, ['imageUrl', 'image']) ? { imageUrl: firstString(raw, ['imageUrl', 'image'])! } : {}),
+    ...(url ? { url } : {}),
+    ...(imageUrl ? { imageUrl } : {}),
   };
 
   const checked = checkedAt.toISOString();
@@ -464,12 +476,12 @@ function unwrap(payload: unknown): unknown {
 
 function parseCategories(raw: Record<string, unknown>): string[] {
   if (Array.isArray(raw.navCategories)) {
-    const categories: string[] = [];
+    const categories: string[] = [], seen = new Set<string>();
     const add = (value: unknown) => {
       const category = record(value);
       if (!category) return;
       const code = firstString(category, ['code', 'id']);
-      if (code && !categories.includes(code)) categories.push(code);
+      if (code && !seen.has(code)) { seen.add(code); categories.push(code); }
       if (Array.isArray(category.superCategories)) category.superCategories.forEach(add);
     };
     raw.navCategories.forEach(add);

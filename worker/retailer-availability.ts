@@ -9,6 +9,7 @@ export type RetailAvailabilityEnv = { COOP_DB?: D1Database; ICA_DB?: D1Database 
 export type RetailManifest = { datasetId: string; inventoryHash: string; distinctIngredients: number };
 export type RetailAvailability = { current: boolean; retailer: RetailerId; scope: StoreScope | null;
   runId: string | null; brokenNames: string[]; expiresAt: string | null };
+export type RetailContext = { availability: RetailAvailability; links: RetailConnectionLink[] };
 export type RetailConnectionLink = { retailer: RetailerId; ingredientId: string; name: string; status: string;
   productId: string | null; referencePrice: RetailPrice | null; expiresAt: string | null };
 
@@ -26,8 +27,10 @@ const stateCache = new WeakMap<object, Map<string, CachedState>>();
 const isHash = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 const binding = (env: RetailAvailabilityEnv, retailer: RetailerId) => retailer === 'coop' ? env.COOP_DB : env.ICA_DB;
 
-function reviewedProducts(connection: ReviewedConnection): RetailProduct[] {
-  return connection.approvedProducts.map(approved => {
+function reviewedProducts(connections: ReviewedConnection[]): RetailProduct[] {
+  const products = new Map<string, RetailProduct>();
+  for (const connection of connections) for (const approved of connection.approvedProducts) {
+    if (products.has(approved.identity)) continue;
     const identity = JSON.parse(approved.identity) as unknown[];
     if (!Array.isArray(identity) || identity.length !== 7) throw new Error('invalid_reviewed_product_identity');
     const packValue = identity[5];
@@ -35,15 +38,30 @@ function reviewedProducts(connection: ReviewedConnection): RetailProduct[] {
     const pack = packValue === null ? null : {quantity:packValue[0] as number,
       unit:packValue[1] as 'g'|'ml'|'piece',approximate:packValue[2] as boolean,
       ...(packValue[3] === null ? {} : {drainedGrams:packValue[3] as number})};
-    return { id: String(identity[0]), ean: identity[1] as string | null, name: String(identity[2]),
+    products.set(approved.identity, { id: String(identity[0]), ean: identity[1] as string | null, name: String(identity[2]),
       brand: identity[3] as string | null, categories: identity[4] as string[],
-      pack, ingredientsText: identity[6] as string | null };
-  });
+      pack, ingredientsText: identity[6] as string | null });
+  }
+  return [...products.values()];
 }
 
 async function metadata(db: D1Database): Promise<DbMeta> {
   const result = await db.prepare('SELECT key,value FROM retail_meta').all<{ key: string; value: string }>();
   return Object.fromEntries(result.results.map(row => [row.key, row.value]));
+}
+
+async function publicationState(db: D1Database): Promise<{meta: DbMeta; run: Run | null}> {
+  const selectRun = `SELECT r.id,r.checked_at,r.expires_at,r.checked_ids_json,r.report_json FROM retail_scope_state s
+    JOIN retail_runs r ON r.id=s.active_run_id WHERE s.scope_key=(SELECT value FROM retail_meta WHERE key='reference_scope')`;
+  if (typeof db.batch === 'function') {
+    // A read-only D1 batch gives a coherent metadata/run snapshot in one binding call.
+    const [meta, run] = await db.batch([
+      db.prepare('SELECT key,value FROM retail_meta'), db.prepare(selectRun),
+    ]);
+    return {meta: Object.fromEntries((meta.results as Array<{key: string; value: string}>).map(row => [row.key, row.value])),
+      run: run.results[0] as Run | undefined ?? null};
+  }
+  return {meta: await metadata(db), run: await db.prepare(selectRun).first<Run>()};
 }
 
 function parseScope(value: string | undefined, retailer: RetailerId): StoreScope | null {
@@ -80,16 +98,13 @@ async function assess(env: RetailAvailabilityEnv, manifest: RetailManifest, reta
     return { availability: failure(retailer), state: null };
   }
   try {
-    const meta = await metadata(db);
+    const {meta,run} = await publicationState(db);
     if (meta.retailer !== retailer || meta.dataset_id !== manifest.datasetId
       || meta.inventory_hash !== manifest.inventoryHash || meta.policy_version !== DIETARY_POLICY_VERSION) {
       return { availability: failure(retailer), state: null };
     }
     const scope = parseScope(meta.reference_scope, retailer);
     if (!scope) return { availability: failure(retailer), state: null };
-    const run = await db.prepare(`SELECT r.id,r.checked_at,r.expires_at,r.checked_ids_json,r.report_json FROM retail_scope_state s
-      JOIN retail_runs r ON r.id=s.active_run_id WHERE s.scope_key=?`).bind(meta.reference_scope)
-      .first<Run>();
     if (!run || !run.id || !Number.isFinite(Date.parse(run.checked_at)) || !Number.isFinite(Date.parse(run.expires_at))
       || Date.parse(run.expires_at) <= now || Date.parse(run.checked_at) > now + 60000
       || now - Date.parse(run.checked_at) >= 86400000) {
@@ -209,7 +224,7 @@ async function assess(env: RetailAvailabilityEnv, manifest: RetailManifest, reta
         health.set(connection.ingredientId, { status: 'needs_review', productId: null });
         continue;
       }
-      try { validateConnections([connection], reviewedProducts(connection)); }
+      try { validateConnections([connection], reviewedProducts([connection])); }
       catch {
         brokenNames.add(connection.name);
         health.set(connection.ingredientId, { status: 'needs_review', productId: null });
@@ -258,40 +273,65 @@ async function lookupPublishedNames(db: D1Database, retailer: RetailerId, scope:
   state: CachedState, names: string[], now: number): Promise<Map<string, RetailConnectionLink> | null> {
   const run = state.run, summary = state.summary, checkedIds = state.checkedIds;
   if (!run || !summary || !checkedIds) return null;
-  const active = await db.prepare(`SELECT s.active_run_id,
+  const activeStatement = db.prepare(`SELECT s.active_run_id,
     (SELECT value FROM retail_meta WHERE key='connections_version') AS connections_version,
     (SELECT value FROM retail_meta WHERE key='dataset_id') AS dataset_id,
     (SELECT value FROM retail_meta WHERE key='inventory_hash') AS inventory_hash,
     (SELECT value FROM retail_meta WHERE key='policy_version') AS policy_version
-    FROM retail_scope_state s WHERE s.scope_key=?`).bind(summary.scopeKey)
-    .first<{ active_run_id: string; connections_version: string; dataset_id: string; inventory_hash: string; policy_version: string }>();
+    FROM retail_scope_state s WHERE s.scope_key=?`).bind(summary.scopeKey);
+  type Active = {active_run_id:string;connections_version:string;dataset_id:string;inventory_hash:string;policy_version:string};
+  const unresolved = [...new Set(names)].filter(name => !state.links?.has(name));
+  const namesJson=JSON.stringify(unresolved);
+  const connectionStatement=db.prepare(`SELECT ingredient_id,ingredient_name,status,document_json FROM retail_connections
+    WHERE ingredient_name IN (SELECT value FROM json_each(?))`).bind(namesJson);
+  let active:Active|null, connectionRows:ConnectionRow[]=[], batchedProducts:Array<{product_id:string;observation_json:string}>|undefined;
+  if(unresolved.length&&typeof db.batch==='function'){
+    // Derive the selected IDs inside SQLite so all three reads share one snapshot
+    // and one binding call. Malformed review JSON stays isolated by validation below.
+    const productStatement=db.prepare(`SELECT product_id,observation_json FROM retail_products WHERE scope_key=?
+      AND product_id IN (SELECT json_extract(CASE WHEN json_valid(p.value) THEN p.value ELSE '{}' END,'$.productId')
+        FROM retail_connections c,json_each(CASE WHEN json_valid(c.document_json) THEN c.document_json ELSE '{}' END,'$.approvedProducts') p
+        WHERE c.ingredient_name IN (SELECT value FROM json_each(?)))
+      AND product_id IN (SELECT value FROM json_each(?))`).bind(summary.scopeKey,namesJson,JSON.stringify([...checkedIds]));
+    const [activeResult,connectionsResult,productsResult]=await db.batch([activeStatement,connectionStatement,productStatement]);
+    active=activeResult.results[0] as Active|undefined??null;
+    connectionRows=connectionsResult.results as ConnectionRow[];
+    batchedProducts=productsResult.results as Array<{product_id:string;observation_json:string}>;
+  }else active=await activeStatement.first<Active>();
   if (active?.active_run_id !== run.id || active.connections_version !== summary.connectionsVersion
     || active.dataset_id !== summary.datasetId || active.inventory_hash !== summary.inventoryHash
     || active.policy_version !== summary.policyVersion) return null;
 
-  const unresolved = [...new Set(names)].filter(name => !state.links?.has(name));
   if (!unresolved.length) return state.links ?? new Map();
-  const connectionResult = await db.prepare(`SELECT ingredient_id,ingredient_name,status,document_json FROM retail_connections
-    WHERE ingredient_name IN (SELECT value FROM json_each(?))`).bind(JSON.stringify(unresolved)).all<ConnectionRow>();
+  if(!batchedProducts)connectionRows=(await connectionStatement.all<ConnectionRow>()).results;
   const wanted = new Set(unresolved);
   const connections = new Map<string, ReviewedConnection>();
   const invalid = new Set<string>();
-  for (const row of connectionResult.results) {
+  for (const row of connectionRows) {
     if (!wanted.has(row.ingredient_name)) continue;
     try {
       const connection = JSON.parse(row.document_json) as ReviewedConnection;
       if (connection.ingredientId !== row.ingredient_id || connection.name !== row.ingredient_name
         || connection.status !== row.status || connections.has(row.ingredient_name)) throw new Error('connection_row_mismatch');
-      validateConnections([connection], reviewedProducts(connection));
       connections.set(connection.name, connection);
     } catch { invalid.add(row.ingredient_name); }
+  }
+  const selectedConnections = [...connections.values()].filter(connection => !invalid.has(connection.name));
+  try { validateConnections(selectedConnections, reviewedProducts(selectedConnections)); }
+  catch {
+    // A malformed selected connection should not invalidate unrelated requested names.
+    // Keep the fast aggregate path for valid rows and isolate only the failing records here.
+    for (const connection of selectedConnections) {
+      try { validateConnections([connection], reviewedProducts([connection])); }
+      catch { invalid.add(connection.name); }
+    }
   }
   const approvedIds = [...new Set([...connections.values()].flatMap(connection => connection.status === 'matched'
     ? connection.approvedProducts.map(product => product.productId) : []))];
   const missingFromRun = new Set([...connections.values()].flatMap(connection => connection.status === 'matched'
     ? connection.approvedProducts.filter(product => !checkedIds.has(product.productId)).map(() => connection.name) : []));
   const checkedApprovedIds = approvedIds.filter(id => checkedIds.has(id));
-  const stored = checkedApprovedIds.length ? await db.prepare(`SELECT product_id,observation_json FROM retail_products WHERE scope_key=?
+  const stored = batchedProducts?{results:batchedProducts}:checkedApprovedIds.length ? await db.prepare(`SELECT product_id,observation_json FROM retail_products WHERE scope_key=?
     AND product_id IN (SELECT value FROM json_each(?))`).bind(summary.scopeKey, JSON.stringify(checkedApprovedIds))
     .all<{ product_id: string; observation_json: string }>() : { results: [] as Array<{ product_id: string; observation_json: string }> };
   const expected = new Set(checkedApprovedIds);
@@ -330,17 +370,20 @@ async function lookupPublishedNames(db: D1Database, retailer: RetailerId, scope:
   return state.links ?? null;
 }
 
-export async function lookupRetailConnections(env: RetailAvailabilityEnv, manifest: RetailManifest,
-  retailer: RetailerId, names: string[], now = Date.now()): Promise<RetailConnectionLink[]> {
-  if (!Array.isArray(names) || names.length > 400 || names.some(name => typeof name !== 'string' || !name.trim())) return [];
+export async function lookupRetailContext(env: RetailAvailabilityEnv, manifest: RetailManifest,
+  retailer: RetailerId, names: string[], now = Date.now()): Promise<RetailContext> {
+  if (!Array.isArray(names) || names.length > 400 || names.some(name => typeof name !== 'string' || !name.trim())) {
+    return { availability: failure(retailer), links: [] };
+  }
   const { availability, state } = await assess(env, manifest, retailer, now);
-  if (!availability.current || !state) return [];
+  if (!availability.current || !state) return { availability, links: [] };
   let byName: Map<string, RetailConnectionLink>;
   if (state.summary) {
     const db = binding(env, retailer);
-    if (!db) return [];
+    if (!db) return { availability: failure(retailer, availability.scope, availability.runId), links: [] };
     const links = await lookupPublishedNames(db, retailer, availability.scope!, state, names, now);
-    if (!links) return [];
+    if (!links) return { availability: failure(retailer, availability.scope, availability.runId,
+      ['active_run_changed']), links: [] };
     byName = links;
   } else {
     const connections = state.connections ?? [], observations = state.observations ?? [], health = state.health ?? new Map();
@@ -357,10 +400,16 @@ export async function lookupRetailConnections(env: RetailAvailabilityEnv, manife
         expiresAt: observation?.expiresAt ?? null }];
     }));
   }
-  return names.map(name => {
+  const links = names.map(name => {
     const link = byName.get(name);
     if (!link) return { retailer, ingredientId: `missing:${name}`, name,
       status: 'needs_review', productId: null, referencePrice: null, expiresAt: null };
     return link;
   });
+  return { availability, links };
+}
+
+export async function lookupRetailConnections(env: RetailAvailabilityEnv, manifest: RetailManifest,
+  retailer: RetailerId, names: string[], now = Date.now()): Promise<RetailConnectionLink[]> {
+  return (await lookupRetailContext(env, manifest, retailer, names, now)).links;
 }

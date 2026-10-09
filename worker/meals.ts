@@ -8,7 +8,7 @@ import {mealSearchPhrase} from '../src/meal-search.ts';
 import {catalogAvailabilityLookupSql,catalogProductLookupSql} from '../src/catalog-query.ts';
 import {calculateMealAvailability,getMealAvailability,mealAvailabilityCacheKey,getMealImmutable,setMealAvailability,setMealImmutable} from './meal-cache.ts';
 import {retailMealQuote,type RetailEnv} from './retailers.ts';
-import {retailerAvailability,lookupRetailConnections} from './retailer-availability.ts';
+import {retailerAvailability,lookupRetailContext} from './retailer-availability.ts';
 export type MealEnv={DB:D1Database;MEAL_DB?:D1Database} & RetailEnv;
 type Manifest={datasetId:string;recipes:number;ingredientOccurrences:number;distinctIngredients:number;reviews:number;inventoryHash:string;repository:string;releaseTag:string;sourceSha256:string;parts?:Array<{firstId:number;lastId:number;recipes:number}>};
 type Definition={filter_id:number;domain:string;key:string;label_sv:string;label_en:string;description:string};
@@ -29,11 +29,19 @@ async function activeRun(env:MealEnv,m:Manifest){
 async function quoteRecipeData(env:MealEnv,m:Manifest,ids:number[]){
   const found=new Map<number,any>(),missing:number[]=[];
   for(const id of ids){const cached=getMealImmutable(env.MEAL_DB!,m.datasetId,'quote',String(id));if(cached!==null)found.set(id,JSON.parse(cached));else missing.push(id);}
-  if(missing.length){const records=await env.MEAL_DB!.prepare(`SELECT recipe_id,json_extract(document_json,'$.source.RecipeServings') AS servings,
+  if(missing.length){
+    // The optional projection is populated before deployment and for future imports.
+    // Old databases retain the exact source path until their projection is ready.
+    try{const projected=await env.MEAL_DB!.prepare(`SELECT recipe_id,document_json FROM meal_quote_projections
+      WHERE dataset_id=? AND recipe_id IN (SELECT value FROM json_each(?))`).bind(m.datasetId,JSON.stringify(missing)).all<{recipe_id:number;document_json:string}>();
+      for(const row of projected.results){found.set(row.recipe_id,JSON.parse(row.document_json));setMealImmutable(env.MEAL_DB!,m.datasetId,'quote',String(row.recipe_id),row.document_json);}
+    }catch{/* An older schema can serve quotes directly from immutable source documents. */}
+    const remaining=missing.filter(id=>!found.has(id));
+    if(remaining.length){const records=await env.MEAL_DB!.prepare(`SELECT recipe_id,json_extract(document_json,'$.source.RecipeServings') AS servings,
     json_extract(document_json,'$.source.RecipeYield') AS recipe_yield,json_extract(document_json,'$.ingredients') AS ingredients_json,
     json_extract(document_json,'$.profile.nutrition_metrics') AS nutrition_json FROM meal_recipes
-    WHERE dataset_id=? AND recipe_id IN (SELECT value FROM json_each(?))`).bind(m.datasetId,JSON.stringify(missing)).all<{recipe_id:number;servings:number|null;recipe_yield:string|null;ingredients_json:string;nutrition_json:string}>();
-    for(const row of records.results){const value={servings:row.servings,recipe_yield:row.recipe_yield,ingredients:JSON.parse(row.ingredients_json) as IngredientAmount[],nutrition:JSON.parse(row.nutrition_json)};found.set(row.recipe_id,value);setMealImmutable(env.MEAL_DB!,m.datasetId,'quote',String(row.recipe_id),JSON.stringify(value));}}
+    WHERE dataset_id=? AND recipe_id IN (SELECT value FROM json_each(?))`).bind(m.datasetId,JSON.stringify(remaining)).all<{recipe_id:number;servings:number|null;recipe_yield:string|null;ingredients_json:string;nutrition_json:string}>();
+    for(const row of records.results){const value={servings:row.servings,recipe_yield:row.recipe_yield,ingredients:JSON.parse(row.ingredients_json) as IngredientAmount[],nutrition:JSON.parse(row.nutrition_json)};found.set(row.recipe_id,value);setMealImmutable(env.MEAL_DB!,m.datasetId,'quote',String(row.recipe_id),JSON.stringify(value));}}}
   return found;
 }
 async function recipeDetail(env:MealEnv,m:Manifest,id:number){
@@ -165,7 +173,7 @@ export async function mealRoutes(request:Request,env:MealEnv,requestJson:(r:Requ
     const doc=JSON.parse(raw);delete doc.reviews;
     const detailNames=[...new Set(doc.ingredients.map((i:any)=>i.ingredient_original))] as string[];
     if(alternative){
-      const version=await retailerAvailability(env,m,alternative),links=await lookupRetailConnections(env,m,alternative,detailNames);
+      const {availability:version,links}=await lookupRetailContext(env,m,alternative,detailNames);
       const byName=new Map(links.map(l=>[l.name,l]));
       return json({datasetId:m.datasetId,recipeId:id,retailer:alternative,...doc,
         ingredients:doc.ingredients.map((i:any)=>({...i,connection:byName.get(i.ingredient_original)??{status:'connections_refresh_pending',retailer:alternative,productId:null}})),
@@ -240,7 +248,7 @@ export async function mealRoutes(request:Request,env:MealEnv,requestJson:(r:Requ
     const records=names?await env.MEAL_DB.prepare('SELECT ingredient_name,document_json FROM meal_ingredients WHERE dataset_id=? AND ingredient_name IN (SELECT value FROM json_each(?)) ORDER BY ingredient_name').bind(m.datasetId,JSON.stringify(names)).all<{ingredient_name:string;document_json:string}>():await env.MEAL_DB.prepare('SELECT ingredient_name,document_json FROM meal_ingredients WHERE dataset_id=? AND ingredient_name>? ORDER BY ingredient_name LIMIT ?').bind(m.datasetId,after,limit+1).all<{ingredient_name:string;document_json:string}>();
     const shown=names?records.results:records.results.slice(0,limit);
     if(alternative){
-      const version=await retailerAvailability(env,m,alternative),links=await lookupRetailConnections(env,m,alternative,shown.map(r=>r.ingredient_name));
+      const {availability:version,links}=await lookupRetailContext(env,m,alternative,shown.map(r=>r.ingredient_name));
       const byName=new Map(links.map(l=>[l.name,l]));
       const documents=new Map(shown.map(r=>{const doc=JSON.parse(r.document_json);delete doc.sourceConnection;
         return[r.ingredient_name,{...doc,connection:byName.get(r.ingredient_name)??{status:'connections_refresh_pending',retailer:alternative,productId:null}}];}));

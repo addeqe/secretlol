@@ -44,9 +44,27 @@ def save(name,data):
  with path.open('wb') as file:
   with gzip.GzipFile(filename='',mode='wb',fileobj=file,mtime=0) as zipped:zipped.write(content)
  return {'file':name,'sha256':h(path.read_bytes()),'bytes':path.stat().st_size,'uncompressedBytes':len(content)}
+def import_batch_count(records):
+ # Keep in sync with the 700,000-byte flush bound in src/meal-import.ts uploadPart.
+ batches=0;pending=0
+ for record in records:
+  size=len(j(record).encode('utf-8'))
+  if pending and pending+size>700_000:
+   batches+=1;pending=0
+  pending+=size
+ if pending:batches+=1
+ return batches
+def estimated_import_writes(day,records):
+ # uploadPart writes both immutable recipe and quote projection rows, updates
+ # uploaded_recipe_count once per batch, and writes import progress/activation.
+ writes=2*len(records)+import_batch_count(records)+1+(1 if day==5 else 0)
+ if day==1:
+  # prepareCommon writes subjects, filter sets, and eight metadata rows.
+  writes+=len(subjects)+len(sets)+8
+ return writes
 shared=save('common.json.gz',j(common));parts=[]
 for day,records in enumerate(days,1):
- part=save(f'day-{day}.jsonl.gz','\n'.join(j(r) for r in records)+'\n');part.update(day=day,recipes=len(records),firstId=records[0]['id'],lastId=records[-1]['id'],maxEstimatedWrites=len(records)+(len(subjects)+len(sets)+10 if day==1 else 10));parts.append(part)
+ part=save(f'day-{day}.jsonl.gz','\n'.join(j(r) for r in records)+'\n');part.update(day=day,recipes=len(records),firstId=records[0]['id'],lastId=records[-1]['id'],maxEstimatedWrites=estimated_import_writes(day,records));parts.append(part)
 archive=out/'recipes_with_filters.sqlite.gz'
 with source.open('rb') as src,archive.open('wb') as dst:
  with gzip.GzipFile(filename='',mode='wb',fileobj=dst,mtime=0) as z:

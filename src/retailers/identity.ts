@@ -11,6 +11,7 @@ const productIdentityCache = new WeakMap<RetailProduct, ProductIdentityCacheEntr
 const policyProductCache = new WeakMap<object, { name: string; brand: string|null;
   ingredientsText: string|null; categories: string[];
   results: Map<string, string|null> }>();
+const policyContentCache = new Map<string, string|null>();
 const ingredientPolicyCache = new Map<string, ReturnType<typeof ingredientPolicy>>();
 
 export function cachedIngredientPolicy(name: string) {
@@ -51,6 +52,16 @@ export function reviewedProductPolicy(product: Pick<RetailProduct, 'name'|'brand
     && productCache.categories.every((category, index) => category === categories[index]);
   const resultKey = `${DIETARY_POLICY_VERSION}\0${ingredientName ?? ''}`;
   if (sameProduct && productCache.results.has(resultKey)) return productCache.results.get(resultKey)!;
+  // Observations and reviewed identity records are parsed into different objects.
+  // A content key lets validation of the approved identity cover the exact same
+  // policy check when the matching current observation is inspected moments later.
+  const contentKey = `${resultKey}\0${JSON.stringify([product.name, product.brand, [...categories].sort(), product.ingredientsText])}`;
+  if (contentKey.length <= 4096 && policyContentCache.has(contentKey)) {
+    const cached = policyContentCache.get(contentKey)!;
+    policyContentCache.delete(contentKey);
+    policyContentCache.set(contentKey, cached);
+    return remember(cached);
+  }
   const titleReason = productPolicy(product, ingredientName);
   if (titleReason) return remember(titleReason);
   const text = product.ingredientsText?.trim();
@@ -74,6 +85,11 @@ export function reviewedProductPolicy(product: Pick<RetailProduct, 'name'|'brand
     results.set(resultKey, reason);
     policyProductCache.set(product, { name: product.name, brand: product.brand,
       ingredientsText: product.ingredientsText ?? null, categories: [...categories], results });
+    if (contentKey.length <= 4096) {
+      if (policyContentCache.has(contentKey)) policyContentCache.delete(contentKey);
+      else if (policyContentCache.size >= 256) policyContentCache.delete(policyContentCache.keys().next().value!);
+      policyContentCache.set(contentKey, reason);
+    }
     return reason;
   }
 }

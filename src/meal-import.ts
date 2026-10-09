@@ -4,6 +4,7 @@ import {readFileSync} from 'node:fs';
 import {rows,D1DatabaseClient} from './database.ts';
 import type {Database} from './types.ts';
 import {ingredientPolicy,DIETARY_POLICY_VERSION} from './dietary-policy.ts';
+import {quoteProjectionSql} from './meal-quote-projection.ts';
 export type MealManifest={schemaVersion:number;datasetId:string;sourceSha256:string;recipes:number;ingredientOccurrences:number;distinctIngredients:number;reviews:number;inventoryHash:string;filterSets:number;common:Asset;parts:Array<Asset&{day:number;recipes:number;firstId:number;lastId:number;maxEstimatedWrites:number}>;releaseTag:string;repository:string;sourceCounts:Record<string,number>};
 type Asset={file:string;sha256:string;bytes:number;uncompressedBytes:number};
 export type MealRecord={id:number;name:string;names:string;summary:string;document:string;hash:string};
@@ -80,7 +81,10 @@ export async function uploadPart(database:Database,m:MealManifest,part:MealManif
   async function flush(){if(!batch.length)return;await database.batch([{sql:`INSERT OR IGNORE INTO meal_recipes SELECT ?,
     json_extract(value,'$.id'),json_extract(value,'$.name'),json_extract(value,'$.names'),json_extract(value,'$.summary'),
     json_extract(value,'$.document'),json_extract(value,'$.hash') FROM json_each(?)`,params:[m.datasetId,JSON.stringify(batch)]},
-    {sql:"UPDATE meal_meta SET value=CAST(CAST(value AS INTEGER)+changes() AS TEXT) WHERE key='uploaded_recipe_count'",params:[]}]);batch=[];bytes=0;}
+    {sql:"UPDATE meal_meta SET value=CAST(CAST(value AS INTEGER)+changes() AS TEXT) WHERE key='uploaded_recipe_count'",params:[]},
+    {sql:`INSERT OR IGNORE INTO meal_quote_projections SELECT r.dataset_id,r.recipe_id,r.content_hash,${quoteProjectionSql}
+      FROM meal_recipes r WHERE r.dataset_id=? AND r.recipe_id IN (SELECT json_extract(value,'$.id') FROM json_each(?))`,
+      params:[m.datasetId,JSON.stringify(batch.map(r=>({id:r.id})))]}]);batch=[];bytes=0;}
   for(const r of records){const size=Buffer.byteLength(JSON.stringify(r));if(bytes+size>700000)await flush();batch.push(r);bytes+=size;}
   await flush();
   const actual=await rows(database,'SELECT recipe_id,content_hash FROM meal_recipes WHERE dataset_id=? AND recipe_id>=? AND recipe_id<=? ORDER BY recipe_id',[m.datasetId,part.firstId,part.lastId]);
@@ -102,4 +106,4 @@ export async function uploadPart(database:Database,m:MealManifest,part:MealManif
   ]);
   return {part:part.day,uploadedRecipes:expected,totalRecipes:m.recipes,complete:part.day===5,...(database instanceof D1DatabaseClient?{rowsWritten:database.rowsWritten,sizeBytes:database.sizeBytes}:{})};
 }
-export function mealSchema(){return ['0001_mealplanner.sql','0002_meal_search.sql'].map(name=>readFileSync(new URL(`../meal-migrations/${name}`,import.meta.url),'utf8')).join('\n');}
+export function mealSchema(){return ['0001_mealplanner.sql','0002_meal_search.sql','0003_meal_quotes.sql'].map(name=>readFileSync(new URL(`../meal-migrations/${name}`,import.meta.url),'utf8')).join('\n');}

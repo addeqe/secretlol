@@ -11,7 +11,7 @@ import type { IngredientAmount, AmountOverride } from '../src/meal-cost.ts';
 import { DIETARY_POLICY_VERSION } from '../src/dietary-policy.ts';
 
 export type RetailEnv = { COOP_DB?: D1Database; ICA_DB?: D1Database;
-  RETAILERS_LIVE_ENABLED?: string; COOP_PUBLIC_SUBSCRIPTION_KEY?: string };
+  RETAILERS_LIVE_ENABLED?: string; COOP_PUBLIC_SUBSCRIPTION_KEY?: string; COMPUTE_QUOTE_CACHE?: QuoteResponseCache };
 export type RecipeDocument = { servings: number | null; recipe_yield: string | null; ingredients: IngredientAmount[] };
 export type RecipeLoader = (ids: number[]) => Promise<Map<number, RecipeDocument>>;
 type Manifest = { datasetId: string; inventoryHash: string };
@@ -27,12 +27,16 @@ async function metadata(db: D1Database) {
   const result = await db.prepare('SELECT key,value FROM retail_meta').all<{key: string; value: string}>();
   return Object.fromEntries(result.results.map(r => [r.key, r.value]));
 }
-async function observations(db: D1Database, retailer: RetailerId, scope: StoreScope, ids: string[]) {
+type ActiveRun = { id: string; checked_at: string; expires_at: string; checked_ids_json: string };
+async function activeRun(db: D1Database, key: string): Promise<ActiveRun | null> {
+  return await db.prepare(`SELECT r.id,r.checked_at,r.expires_at,r.checked_ids_json FROM retail_scope_state s
+    JOIN retail_runs r ON r.id=s.active_run_id WHERE s.scope_key=?`).bind(key).first<ActiveRun>() ?? null;
+}
+async function observations(db: D1Database, retailer: RetailerId, scope: StoreScope, ids: string[],
+  suppliedRun?: ActiveRun | null) {
   if (!ids.length) return [];
   const key = scopeKey(retailer, scope);
-  const run = await db.prepare(`SELECT r.checked_at,r.expires_at,r.checked_ids_json FROM retail_scope_state s
-    JOIN retail_runs r ON r.id=s.active_run_id WHERE s.scope_key=?`).bind(key)
-    .first<{checked_at: string; expires_at: string; checked_ids_json: string}>();
+  const run = suppliedRun === undefined ? await activeRun(db, key) : suppliedRun;
   if (!run) return [];
   const checked = new Set<string>(JSON.parse(run.checked_ids_json));
   const result = await db.prepare(`SELECT observation_json FROM retail_products WHERE scope_key=?
@@ -60,7 +64,8 @@ export class WorkerObservationCache implements ObservationCache {
       const response=await (caches as CacheStorage & {default:Cache}).default.match(await this.request(keys));
       const values=response?await response.json() as Array<[string,ProductObservation]>:[];
       if(!Array.isArray(values)||values.length>keys.length)return found;
-      for(const value of values)if(Array.isArray(value)&&keys.includes(value[0])&&value[1]){
+      const requestedKeys=new Set(keys);
+      for(const value of values)if(Array.isArray(value)&&requestedKeys.has(value[0])&&value[1]){
         await this.memory.set(value[0],value[1]);found.set(value[0],value[1]);
       }
     }catch{/* Ignore a malformed or missing optional cache bundle. */}
@@ -89,6 +94,148 @@ function resolver(env: RetailEnv, retailer: RetailerId) {
   let found = resolvers.get(key);
   if (!found) { found = new LocalProductResolver(retailClient(env, retailer), cache); if (resolvers.size >= 4) resolvers.clear(); resolvers.set(key, found); }
   return found;
+}
+
+export type QuoteResponseCache = {
+  readonly available: boolean;
+  match(key: string, now: number): Promise<Response | null>;
+  put(key: string, response: Response, expiresAt: number): Promise<void>;
+};
+const QUOTE_MEMORY_MAX_ENTRIES = 64;
+const QUOTE_MEMORY_MAX_BYTES = 4 * 1024 * 1024;
+const QUOTE_CACHE_MAX_BODY_BYTES = 256 * 1024;
+const QUOTE_CACHE_MAX_KEY_BYTES = 64 * 1024;
+type MemoryQuoteEntry = { body: string; expiresAt: number; bodyBytes: number; keyBytes: number; contentType: string };
+
+async function readBoundedBody(response: Response, maximumBytes: number): Promise<{body: string; bytes: number} | null> {
+  const declaredLength = Number(response.headers.get('Content-Length'));
+  if (Number.isFinite(declaredLength) && declaredLength > maximumBytes) return null;
+  if (!response.body) return {body:'',bytes:0};
+  const reader = response.body.getReader(), chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    while (true) {
+      const {done,value} = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      // A cloned Response body is a tee. Awaiting cancel on this branch may
+      // wait for the untouched original branch, while quote handling awaits
+      // this cache write before returning that original response.
+      if (bytes > maximumBytes) { void reader.cancel().catch(()=>{}); return null; }
+      chunks.push(value);
+    }
+  } catch { return null; }
+  const bodyBytes = new Uint8Array(bytes);
+  let offset = 0;
+  for (const chunk of chunks) { bodyBytes.set(chunk,offset); offset += chunk.byteLength; }
+  return {body:new TextDecoder().decode(bodyBytes),bytes};
+}
+
+export class WorkerQuoteResponseCache implements QuoteResponseCache {
+  private readonly memoryEnabled: boolean;
+  private readonly memory = new Map<string,MemoryQuoteEntry>();
+  private memoryBytes = 0;
+  constructor(options: {memoryEnabled?: boolean} = {}) { this.memoryEnabled = options.memoryEnabled ?? false; }
+  get available() { return this.memoryEnabled || typeof caches !== 'undefined'; }
+  private async request(key: string) {
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key));
+    const hex = [...new Uint8Array(digest)].map(v => v.toString(16).padStart(2, '0')).join('');
+    return new Request(`https://retailer-cache.invalid/complete-quote/${hex}`);
+  }
+  async match(key: string, now: number): Promise<Response | null> {
+    if (!this.available || new TextEncoder().encode(key).byteLength > QUOTE_CACHE_MAX_KEY_BYTES) return null;
+    if (this.memoryEnabled) {
+      const entry = this.memory.get(key);
+      if (entry) {
+        if (entry.expiresAt > now) {
+          this.memory.delete(key); this.memory.set(key,entry);
+          return new Response(entry.body,{status:200,headers:{'Content-Type':entry.contentType,
+            'X-Quote-Cache-Expires':String(entry.expiresAt)}});
+        }
+        this.removeMemoryEntry(key,entry);
+      }
+    }
+    if (typeof caches === 'undefined') return null;
+    try {
+      const response = await (caches as CacheStorage & {default: Cache}).default.match(await this.request(key));
+      if (!response || response.status !== 200) return null;
+      const expiresAt = Number(response.headers.get('X-Quote-Cache-Expires'));
+      return Number.isFinite(expiresAt) && expiresAt > now ? response : null;
+    } catch { return null; }
+  }
+  async put(key: string, response: Response, expiresAt: number): Promise<void> {
+    if (!this.available || response.status !== 200 || new TextEncoder().encode(key).byteLength > QUOTE_CACHE_MAX_KEY_BYTES) return;
+    const now = Date.now(), maxAge = Math.floor((expiresAt - now) / 1000);
+    if (expiresAt <= now || maxAge < 1) return;
+    try {
+      const result = await readBoundedBody(response,QUOTE_CACHE_MAX_BODY_BYTES);
+      if (!result) return;
+      const keyBytes = new TextEncoder().encode(key).byteLength;
+      if (this.memoryEnabled) this.remember(key,{body:result.body,expiresAt,bodyBytes:result.bytes,keyBytes,
+        contentType:response.headers.get('Content-Type') ?? 'application/json'});
+      if (typeof caches === 'undefined') return;
+      await (caches as CacheStorage & {default: Cache}).default.put(await this.request(key), new Response(result.body, {
+        status: 200, headers: {'Content-Type': response.headers.get('Content-Type') ?? 'application/json',
+          'Cache-Control': `public, max-age=${maxAge}`, 'X-Quote-Cache-Expires': String(expiresAt)},
+      }));
+    } catch { /* Cache failures must never change quote correctness; memory is retained. */ }
+  }
+  private remember(key:string,entry:MemoryQuoteEntry):void {
+    const size=entry.keyBytes+entry.bodyBytes;
+    if (size>QUOTE_MEMORY_MAX_BYTES) return;
+    const previous=this.memory.get(key);
+    if(previous)this.removeMemoryEntry(key,previous);
+    while(this.memory.size>=QUOTE_MEMORY_MAX_ENTRIES||this.memoryBytes+size>QUOTE_MEMORY_MAX_BYTES){
+      const oldest=this.memory.entries().next().value as [string,MemoryQuoteEntry]|undefined;
+      if(!oldest)break;
+      this.removeMemoryEntry(oldest[0],oldest[1]);
+    }
+    this.memory.set(key,entry);this.memoryBytes+=size;
+  }
+  private removeMemoryEntry(key:string,entry:MemoryQuoteEntry):void {
+    if(this.memory.delete(key))this.memoryBytes-=entry.keyBytes+entry.bodyBytes;
+  }
+}
+const quoteResponseCache = new WorkerQuoteResponseCache();
+
+function quoteCacheRequestKey(body: unknown, meta: Record<string,string>, retailer: RetailerId,
+  requestedScopeKey: string, scopeKeys: string[], runs: Map<string,ActiveRun | null>,
+  mappings: Array<{reference_product_id:string;identity_json:string}>): string | null {
+  if (!meta.connections_version) return null;
+  const runIds = scopeKeys.map(key => [key, runs.get(key)?.id ?? null] as const);
+  if (runIds.some(([,id]) => id === null)) return null;
+  return JSON.stringify([body, retailer, meta.dataset_id, meta.inventory_hash, meta.policy_version,
+    meta.connections_version, requestedScopeKey, runIds, mappings, 'complete-quote-cache-v1']);
+}
+function runCurrentForQuote(run: ActiveRun | null, now: number): boolean {
+  if (!run) return false;
+  const checked = Date.parse(run.checked_at), expires = Date.parse(run.expires_at);
+  return Number.isFinite(checked) && checked <= now + 60_000 && now - checked < 86_400_000
+    && Number.isFinite(expires) && expires > now;
+}
+function quoteCacheExpiry(now: number, local: boolean, runs: ActiveRun[], observations: ProductObservation[]): number {
+  let expiry = now + (local ? 30 * 60_000 : 86_400_000);
+  const include = (value: string | null | undefined) => {
+    if (value == null || value === '') return true;
+    const time = Date.parse(value);
+    if (!Number.isFinite(time)) { expiry = now; return false; }
+    if (time > now) expiry = Math.min(expiry, time);
+    return true;
+  };
+  for (const run of runs) {
+    include(run.expires_at);
+    const checked = Date.parse(run.checked_at);
+    if (!Number.isFinite(checked)) return now;
+    expiry = Math.min(expiry, checked + 86_400_000);
+  }
+  for (const observation of observations) {
+    if (!include(observation.expiresAt)) return now;
+    const checked = Date.parse(observation.checkedAt);
+    if (!Number.isFinite(checked)) return now;
+    expiry = Math.min(expiry, checked + 86_400_000);
+    if (!include(observation.price?.validFrom) || !include(observation.price?.validUntil)) return now;
+  }
+  return expiry;
 }
 
 export async function retailerRoutes(request: Request, env: RetailEnv): Promise<Response> {
@@ -151,9 +298,35 @@ export async function retailerRoutes(request: Request, env: RetailEnv): Promise<
 }
 
 type Selection = { recipeId: number; servings?: number; amountOverrides?: Record<string, AmountOverride> };
+type ObservationsById = Map<string, ProductObservation[]>;
+function indexObservations(found:ProductObservation[]):ObservationsById {
+  const byId:ObservationsById=new Map();
+  for(const observation of found){const entries=byId.get(observation.product.id);if(entries)entries.push(observation);else byId.set(observation.product.id,[observation]);}
+  return byId;
+}
+type ReferenceCandidatesByUnit = Map<string, ProductObservation[]>;
+function indexReferenceCandidates(foundById:ObservationsById,retailer:RetailerId,scope:StoreScope,now:number):ReferenceCandidatesByUnit {
+  const byUnit:ReferenceCandidatesByUnit=new Map();
+  const add=(unit:QuantityUnit,id:string,observation:ProductObservation)=>{
+    const key=JSON.stringify([unit,id]),entries=byUnit.get(key);
+    if(entries)entries.push(observation);else byUnit.set(key,[observation]);
+  };
+  for(const [id,observations] of foundById)for(const observation of observations){
+    if(!observationUsable(observation,retailer,scope,now)||observation.price!.depositOre===null)continue;
+    const price=observation.price!;
+    if(price.basis==='pack'){
+      const pack=observation.product.pack;
+      if(pack&&!pack.approximate&&!(pack.unit==='g'&&pack.drainedGrams!=null))add(pack.unit,id,observation);
+    }else if(price.depositOre===0){
+      if(price.basis==='kg')add('g',id,observation);
+      else if(price.basis==='l')add('ml',id,observation);
+    }
+  }
+  return byUnit;
+}
 // A local request needs only a cheap reference estimate. Exact package searches
 // run once per menu, with the requested store's prices and a shared work budget.
-function referenceEstimate(menu:MenuFinalist,found:ProductObservation[],retailer:RetailerId,scope:StoreScope,now:number):number|null {
+function referenceEstimate(menu:MenuFinalist,candidatesByUnit:ReferenceCandidatesByUnit):number|null {
   const groups=new Map<string,IngredientDemand>();
   for(const d of menu.demands){
     if(d.nonPurchased)continue;
@@ -165,12 +338,12 @@ function referenceEstimate(menu:MenuFinalist,found:ProductObservation[],retailer
   const priceFor=(o:ProductObservation,q:number)=>o.price!.basis==='pack'
     ? Math.ceil(q/o.product.pack!.quantity)*(o.price!.amountOre+o.price!.depositOre!):Math.round(q*o.price!.amountOre/1000);
   for(const d of groups.values()){
-    const options=found.filter(o=>d.approvedProductIds.includes(o.product.id)&&observationUsable(o,retailer,scope,now)
-      &&o.price!.depositOre!==null&&(o.price!.basis==='pack'
-        ? !!o.product.pack&&!o.product.pack.approximate&&o.product.pack.unit===d.unit&&!(d.unit==='g'&&o.product.pack.drainedGrams!=null)
-        : o.price!.depositOre===0&&(o.price!.basis==='kg'?d.unit==='g':d.unit==='ml')));
-    options.sort((a,b)=>priceFor(a,d.quantity!)-priceFor(b,d.quantity!)||a.product.id.localeCompare(b.product.id));
-    const o=options[0];if(!o)return null;
+    let o:ProductObservation|undefined,bestCost=Number.POSITIVE_INFINITY;
+    for(const id of d.approvedProductIds)for(const candidate of candidatesByUnit.get(JSON.stringify([d.unit,id]))??[]){
+      const cost=priceFor(candidate,d.quantity!);
+      if(!o||cost<bestCost||cost===bestCost&&candidate.product.id.localeCompare(o.product.id)<0){o=candidate;bestCost=cost;}
+    }
+    if(!o)return null;
     const prior=needs.get(o.product.id);if(prior)prior.quantity+=d.quantity!;else needs.set(o.product.id,{o,quantity:d.quantity!});
   }
   return [...needs.values()].reduce((n,v)=>n+priceFor(v.o,v.quantity),0);
@@ -182,7 +355,7 @@ function selections(value: any): value is Selection[] {
     && (r.amountOverrides === undefined || r.amountOverrides && typeof r.amountOverrides === 'object' && !Array.isArray(r.amountOverrides)));
 }
 export async function retailMealQuote(env: RetailEnv, manifest: Manifest, body: any, load: RecipeLoader,
-  dependencies?: {client?: RetailClient; cache?: ObservationCache}): Promise<Response> {
+  dependencies?: {client?: RetailClient; cache?: ObservationCache; quoteCache?: QuoteResponseCache}): Promise<Response> {
   if (!retailerId(body?.retailer)) return fail('retailer_must_be_coop_or_ica');
   const retailer = body.retailer, db = binding(env, retailer);
   if (!db) return fail('retailer_database_not_connected', 503);
@@ -202,6 +375,37 @@ export async function retailMealQuote(env: RetailEnv, manifest: Manifest, body: 
   if (body.priceMode === 'local') {
     scope = {storeId:body.storeId, channel:body.channel, ...(body.slotId !== undefined ? {slotId:body.slotId} : {})};
     try { validateScope(scope); } catch { return fail('invalid_store_scope'); }
+  }
+  let localClient: RetailClient | null = null;
+  if (body.priceMode === 'local') {
+    if (env.RETAILERS_LIVE_ENABLED !== 'true' && !dependencies?.client) return fail('retailer_live_lookups_disabled',503);
+    localClient = dependencies?.client ?? retailClient(env,retailer);
+    if (localClient.retailer !== retailer || !localClient.capabilities.verifiedStorePricing || !localClient.capabilities.productLookup)
+      return fail('retailer_local_prices_not_verified',503);
+  }
+  const now = Date.now();
+  const responseCache = dependencies?.quoteCache ?? env.COMPUTE_QUOTE_CACHE ?? quoteResponseCache;
+  const referenceScopeKey = scopeKey(retailer,reference), requestedScopeKey = scopeKey(retailer,scope);
+  const cacheScopeKeys = [referenceScopeKey];
+  const quoteRuns = new Map<string,ActiveRun | null>();
+  let currentMappings: Array<{reference_product_id:string;identity_json:string}> = [];
+  let mappingsCacheable = true;
+  let responseCacheKey: string | null = null;
+  if (responseCache.available) {
+    if (body.priceMode === 'local') {
+      currentMappings = (await db.prepare(`SELECT reference_product_id,identity_json FROM retail_local_mappings
+        WHERE scope_key=? ORDER BY reference_product_id LIMIT 401`).bind(requestedScopeKey).all<{reference_product_id:string;identity_json:string}>()).results;
+      mappingsCacheable = currentMappings.length <= 400;
+    }
+    for (const key of cacheScopeKeys) quoteRuns.set(key, await activeRun(db,key));
+    if (mappingsCacheable && cacheScopeKeys.every(key => runCurrentForQuote(quoteRuns.get(key) ?? null,now))) {
+      responseCacheKey = quoteCacheRequestKey(body,meta,retailer,requestedScopeKey,cacheScopeKeys,quoteRuns,currentMappings);
+      if (responseCacheKey) {
+        const cached = await responseCache.match(responseCacheKey,now);
+        if (cached) return new Response(cached.body,{status:200,headers:{'Content-Type':'application/json',
+          'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'}});
+      }
+    }
   }
   const ids = [...new Set(candidates.flatMap(c=>c.recipes.map(r=>r.recipeId)))];
   const documents = await load(ids);
@@ -234,7 +438,10 @@ export async function retailMealQuote(env: RetailEnv, manifest: Manifest, body: 
   }
   const tracked = [...new Set(connections.flatMap(c=>c.approvedProducts.map(p=>p.productId)))];
   if (tracked.length > 400) return fail('local_lookup_product_budget');
-  const now = Date.now(), referenceObservations = await observations(db,retailer,reference,tracked);
+  const referenceObservations = await observations(db,retailer,reference,tracked,
+    quoteRuns.has(referenceScopeKey) ? quoteRuns.get(referenceScopeKey) : undefined);
+  const referenceById=indexObservations(referenceObservations);
+  const referenceCandidates=body.priceMode==='local'?indexReferenceCandidates(referenceById,retailer,reference,now):null;
   const withApproved = (items: MenuFinalist[], reviewed: ReviewedConnection[], found: ProductObservation[], store: StoreScope) => {
     const foundById = new Map<string, ProductObservation[]>();
     for (const observation of found) {
@@ -252,15 +459,26 @@ export async function retailMealQuote(env: RetailEnv, manifest: Manifest, body: 
     return items.map(f=>({...f,demands:f.demands.map(d=>({...d,approvedProductIds:eligible.get(d.ingredientId) ?? []}))}));
   };
   const referenceFinalists = withApproved(finalists,connections,referenceObservations,reference);
-  if(body.priceMode==='local')for(const f of referenceFinalists)finalists.find(c=>c.id===f.id)!.referenceCostOre=referenceEstimate(f,referenceObservations,retailer,reference,now);
+  if(body.priceMode==='local'){
+    // Finalists can be duplicate recipe selections under different menu IDs.
+    // Cache only an exact serialization of the demand rows, preserving input
+    // order and every field referenceEstimate consumes.
+    const estimates=new Map<string,number|null>();
+    for(const f of referenceFinalists){
+      const key=JSON.stringify(f.demands);
+      if(!estimates.has(key))estimates.set(key,referenceEstimate(f,referenceCandidates!));
+      finalists.find(c=>c.id===f.id)!.referenceCostOre=estimates.get(key)!;
+    }
+  }
   let priced = referenceObservations, reviewed = connections;
   if (body.priceMode === 'local') {
-    if (env.RETAILERS_LIVE_ENABLED !== 'true' && !dependencies?.client) return fail('retailer_live_lookups_disabled',503);
-    const mapped = await db.prepare(`SELECT identity_json FROM retail_local_mappings WHERE scope_key=?
-      AND reference_product_id IN (SELECT value FROM json_each(?))`).bind(scopeKey(retailer,scope),JSON.stringify(tracked)).all<{identity_json:string}>();
-    try { reviewed = mappedConnections(connections,mapped.results.map(r=>JSON.parse(r.identity_json) as LocalMapping)); }
+    const mappedRows = responseCache.available && mappingsCacheable ? currentMappings.filter(row=>tracked.includes(row.reference_product_id))
+      : (await db.prepare(`SELECT reference_product_id,identity_json FROM retail_local_mappings WHERE scope_key=?
+        AND reference_product_id IN (SELECT value FROM json_each(?))`).bind(scopeKey(retailer,scope),JSON.stringify(tracked))
+        .all<{reference_product_id:string;identity_json:string}>()).results;
+    try { reviewed = mappedConnections(connections,mappedRows.map(r=>JSON.parse(r.identity_json) as LocalMapping)); }
     catch { return fail('retailer_local_mapping_needs_review',503); }
-    const localResolver = dependencies?.client ? new LocalProductResolver(dependencies.client,dependencies.cache ?? cache) : resolver(env,retailer);
+    const localResolver = dependencies?.client ? new LocalProductResolver(localClient!,dependencies.cache ?? cache) : resolver(env,retailer);
     if (localResolver.client.retailer !== retailer || !localResolver.client.capabilities.verifiedStorePricing || !localResolver.client.capabilities.productLookup) return fail('retailer_local_prices_not_verified',503);
     try { priced = (await localResolver.resolve(scope,reviewed,now)).observations; }
     catch { return fail('retailer_local_prices_unavailable',503); }
@@ -270,7 +488,7 @@ export async function retailMealQuote(env: RetailEnv, manifest: Manifest, body: 
     maxStates:Math.floor(1000/candidates.length),maxWork:Math.floor(20000/candidates.length),budgetOre:body.budgetOre});
   if(body.priceMode!=='local')for(const f of ranked)f.referenceCostOre=f.basket.purchaseCostOre;
   const winner = ranked.find(f=>f.basket.complete && f.basket.withinBudget !== false);
-  return json({retailer,storeId:scope.storeId,channel:scope.channel,slotId:scope.slotId ?? null,
+  const response = json({retailer,storeId:scope.storeId,channel:scope.channel,slotId:scope.slotId ?? null,
     priceMode:body.priceMode ?? 'reference', priceSource:body.priceMode === 'local' ? 'local-webshop' : 'reference-webshop',
     datasetId:manifest.datasetId,inventoryHash:manifest.inventoryHash,policyVersion:DIETARY_POLICY_VERSION,
     currency:'SEK',priceScale:'öre',pricedAt:new Date(now).toISOString(),
@@ -279,6 +497,16 @@ export async function retailMealQuote(env: RetailEnv, manifest: Manifest, body: 
     cheapestVerified:!!winner && ranked.every(f=>f.basket.complete && f.basket.optimizationComplete),
     ...(candidates.length===1 ? {basket:ranked[0].basket} : {}),
     limitations:['Public non-member prices only.','Unknown amounts remain unresolved.','Package cost includes deposit; consumption cost excludes it.','Webshop prices exclude delivery/service fees.']});
+  // Unknown quantities and incompatible units are immutable request facts too.
+  // Preserve those explicit unresolved results; a different override, run or
+  // mapping changes the key. Never reuse a search that exhausted its budget.
+  if (responseCacheKey && ranked.every(f=>f.basket.optimizationComplete)) {
+    const runs = cacheScopeKeys.map(key=>quoteRuns.get(key)).filter((run):run is ActiveRun=>!!run);
+    const pricedById = new Map([...referenceObservations,...priced].map(observation=>[`${scopeKey(observation.retailer,observation.scope)}:${observation.product.id}`,observation]));
+    const expiresAt = quoteCacheExpiry(now,body.priceMode==='local',runs,[...pricedById.values()]);
+    if (expiresAt > now) await responseCache.put(responseCacheKey,response.clone(),expiresAt);
+  }
+  return response;
 }
 
 function retailerOpenApi(origin: string) {

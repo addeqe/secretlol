@@ -1,10 +1,43 @@
 // The owner's ingredient/brand policy. This is a named-food filter, not a
 // certification of hidden ingredients, manufacturing processes or suppliers.
+import { INGREDIENT_POLICY_SEED, POLICY_SEED_INPUT_COUNT, POLICY_SEED_VERSION, POLICY_TEXT_SEED } from './dietary-policy-seed.ts';
+
 export const DIETARY_POLICY_VERSION = 'owner-halal-brands-strict-2';
 export const MEAT_BRANDS = ['affco','qibbla halal','agadeer','aladin','jack links'] as const;
 export const CHICKEN_BRANDS = [...MEAT_BRANDS,'eldorado'] as const;
-export const policyText = (s:string) => s.normalize('NFKD').replace(/\p{M}/gu,'').toLowerCase()
-  .replace(/[’']/g,'').replace(/[^a-z0-9%]+/g,' ').trim().replace(/\s+/g,' ');
+const POLICY_CACHE_LIMIT = 1024;
+const POLICY_CACHE_MAX_INPUT_LENGTH = 4096;
+const policySeedCurrent = POLICY_SEED_VERSION === DIETARY_POLICY_VERSION && POLICY_SEED_INPUT_COUNT <= 4096;
+const policyTextSeed = policySeedCurrent ? new Map(POLICY_TEXT_SEED) : new Map<string, string>();
+const ingredientPolicySeed = policySeedCurrent
+  ? new Map(INGREDIENT_POLICY_SEED.map(([input, blockedReason, meat]) => [input, { blockedReason, meat }]))
+  : new Map<string, PolicyClassification>();
+function cacheGet<T>(cache:Map<string,T>,key:string):T|undefined {
+  const value=cache.get(key);
+  if(value===undefined)return undefined;
+  cache.delete(key);cache.set(key,value);
+  return value;
+}
+function cacheSet<T>(cache:Map<string,T>,key:string,value:T) {
+  cache.delete(key);cache.set(key,value);
+  if(cache.size>POLICY_CACHE_LIMIT)cache.delete(cache.keys().next().value!);
+}
+const policyTextCache=new Map<string,string>();
+export function policyText(s:string) {
+  if(s.length<=POLICY_CACHE_MAX_INPUT_LENGTH){
+    const seeded=policyTextSeed.get(s);
+    if(seeded!==undefined)return seeded;
+    const key=`${DIETARY_POLICY_VERSION}\0${s}`,cached=cacheGet(policyTextCache,key);
+    if(cached!==undefined)return cached;
+    const value=normalizePolicyTextUncached(s);
+    cacheSet(policyTextCache,key,value);return value;
+  }
+  return normalizePolicyTextUncached(s);
+}
+export function normalizePolicyTextUncached(s:string) {
+  return s.normalize('NFKD').replace(/\p{M}/gu,'').toLowerCase()
+    .replace(/[’']/g,'').replace(/[^a-z0-9%]+/g,' ').trim().replace(/\s+/g,' ');
+}
 export type MeatKind = 'chicken'|'red_meat'|'other_meat';
 export type PolicyClassification = {blockedReason:string|null;meat:MeatKind|null};
 const plant = /\b(?:vegan|vegetarian|veggie|meatless|plant based|quorn|tempeh)\b|\b(?:soy|soya|imitation|coconut) (?:bacon|beef|chicken|meat|sausage)/;
@@ -15,8 +48,16 @@ function withoutNonAlcoholFoods(s:string){
     .replace(/\b(?:root beer|ginger beer|ginger ale|birch beer|beer yeast|brewers yeast|champagne yeast|champagne grapes)\b/g,'food')
     .replace(/\b(?:non alcoholic|nonalcoholic|alcohol free|alkoholfri|0 0%) (?:beer|wine|lager|ale|rum|vodka)\b/g,'food');
 }
-export function ingredientPolicy(name:string):PolicyClassification {
-  const s=policyText(name), isPlant=plant.test(s);
+export function evaluateIngredientPolicyUncached(name:string):PolicyClassification {
+  return evaluateNormalizedIngredient(normalizePolicyTextUncached(name));
+}
+
+function classifyIngredient(name:string):PolicyClassification {
+  return evaluateNormalizedIngredient(policyText(name));
+}
+
+function evaluateNormalizedIngredient(s:string):PolicyClassification {
+  const isPlant=plant.test(s);
   if(/\b(?:anisette|ricard|herbsaint|cachaca|pisco|eau de vie)\b|\bcreme de (?:cacao|menthe|cassis)\b/.test(s))return {blockedReason:'alcohol',meat:null};
   if(/\bdrunken cherries\b/.test(s))return {blockedReason:'uncertain_alcohol_source',meat:null};
   if(/^thai burgers$/.test(s))return {blockedReason:'uncertain_animal_source',meat:null};
@@ -48,6 +89,20 @@ export function ingredientPolicy(name:string):PolicyClassification {
   if(/\b(?:broth|stock|bouillon|consomme|dripping|drippings|bone broth)\b/.test(s) &&
     !/\b(?:vegetable|veggie|mushroom|fish|seafood|clam|clams|lobster|shrimp|prawn|bonito|herb|garlic|onion|dashi)\b/.test(s))return {blockedReason:'uncertain_animal_source',meat:null};
   return {blockedReason:null,meat:null};
+}
+
+const ingredientPolicyCache=new Map<string,PolicyClassification>();
+export function ingredientPolicy(name:string):PolicyClassification {
+  if(name.length<=POLICY_CACHE_MAX_INPUT_LENGTH){
+    const seeded=ingredientPolicySeed.get(name);
+    if(seeded)return {...seeded};
+    const key=`${DIETARY_POLICY_VERSION}\0${name}`,cached=cacheGet(ingredientPolicyCache,key);
+    if(cached!==undefined)return {...cached};
+    const value=classifyIngredient(name);
+    cacheSet(ingredientPolicyCache,key,value);
+    return {...value};
+  }
+  return evaluateNormalizedIngredient(normalizePolicyTextUncached(name));
 }
 
 type Product={name:string;brand:string|null;categories?:string[]};

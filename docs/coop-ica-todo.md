@@ -26,8 +26,10 @@ Senast avstämd: 9 oktober 2026. Coop-referenskatalogen är insamlad, granskade 
 - [x] Coop: GitHub Actions-källprovet passerade i [körning 37904883640](https://github.com/addeqe/secretlol/actions/runs/37904883640). Coop D1-bindingen är driftsatt och granskad publicering är genomförd.
 - [ ] ICA: automatisk produkt-/prishämtning från backend eller GitHub Actions återstår. Exakta första­parts­anrop från server får CloudFront 403, medan webbappen använder `AwsWafIntegration.fetch`. ICA:s produkt-/prisstöd är avstängt. Se [källunderlaget](upstream-ica.md) och [browseralternativet](ica-browser-bridge.md).
 - [x] Coop: normal uppdatering passerade i [körning 37908550399](https://github.com/addeqe/secretlol/actions/runs/37908550399): 376 kontrollerade ID:n, noll ändrade produkter, 4 skrivningar och 4 034 läsningar. Schemat är 04:50 UTC varje dag.
-- [x] Optimera kalla statusanrop, produktuppslag och upprepade policykontroller. Verifiera referens-/lokalofferter efter driftsättning. Upprepade molnprov ligger under 10 ms CPU; enstaka första anrop ligger högre. Se [mätning och begränsning](retailer-verification.md).
-- [ ] Lastprova maximala menyer och många kalla instanser på Workers Free. Samtliga anrop under CPU-gränsen är ännu inte verifierade; ingen betald plan har aktiverats.
+- [x] Optimera kalla statusanrop, produktuppslag och upprepade policykontroller. Verifiera referens-/lokalofferter efter driftsättning. Komprimerat offertunderlag, förberedd policycache, snabbare förpackningsoptimering och versionskontrollerad offertcache är införda. Se [verifieringen](retailer-verification.md).
+- [x] Driftsätt en liten Worker-gateway och ett separat gratis DO-beräkningslager. Verifiera 18 API-anrop, tre 32-receptfinalister samt 96 olika recept över tre finalister med 200 unika ingrediensnamn. Samma priser och explicita olösta mängder bevaras. Ingen betald plan har aktiverats.
+- [x] Verifiera både gatewayens CPU och beräkningslagrets CPU/duration efter att Cloudflares telemetri hunnit läsas in.
+- [ ] Fortsatt trafiklastprov när användningen växer. Det avgränsade API-provet bevisar inte obegränsad kapacitet.
 - [ ] För båda: verifiera identifierares portabilitet mellan butiker och prisvillkor utöver de redan provade butiksscopena. Ett kontrollerat ID mellan två butiker bevisar inte generell portabilitet.
 
 ## Återstår innan användning
@@ -40,7 +42,7 @@ Senast avstämd: 9 oktober 2026. Coop-referenskatalogen är insamlad, granskade 
 - [x] Läs molninventeringen med 881 unika ingrediensnamn och 15 244 recept. Kandidatgranskning och publicering är klara: 564 matchade, 311 behöver granskning och 6 behöver inte köpas. Kopplingarna täcker 7 230 recept och 82 876 av 96 082 ingrediensförekomster. Coop spårar 376 godkända produkt-ID:n; olösta ingredienser förblir olösta.
 - [x] Skapa separat Coop D1-databas och kör migration. Ingen ICA-databas har skapats.
 - [x] Driftsätt Coop-binding och publicera granskade kopplingar efter kvotkontroll. D1 och Worker är aktiva.
-- [x] Typkontroll passerar, hela testsuiten passerar **210/210** och Worker-provet med separata lokala databaser passerar. Även befintliga Willys-anrop ingår. Se [verifieringen](retailer-verification.md).
+- [x] Typkontroll passerar, hela testsuiten passerar **250/250** och Worker-provet med separata lokala databaser passerar. Även befintliga Willys-anrop ingår. Se [verifieringen](retailer-verification.md).
 - [x] Det avgränsade ICA-browserprovet har körts med vanlig Chromium/Playwright efter användarens godkännande. Butikssidan öppnades, men produktkontrollen stoppades av CAPTCHA. Ingen CAPTCHA löstes och inga ytterligare liveförsök gjordes därefter. ICA:s automatiska prishämtning är fortfarande avstängd. Syntax och spärren för standardkörning passerar. Se [provet](ica-browser-probe.md).
 - [x] Verifiera referens- och lokalofferter med Coop-priser, inklusive två menyfinalister. För Västberga och Daglivs gav samma gräddprodukt 2 550 respektive 2 755 öre. Aktualitet, cache och offertstatus har regressionstester.
 - [x] Kalla receptanrop använder den atomärt publicerade kopplingsstatusen och läser bara begärda kopplingar och produkter. Ändrad version eller policy stänger för gamla sammanfattningar; tidsgränser räknas om.

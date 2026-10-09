@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { LocalDatabase, rows } from '../src/database.ts';
 import { retailSchema, configureRetailDataset, publishRetailObservations, type RetailDataset } from '../src/retailers/storage.ts';
 import { productIdentity } from '../src/retailers/identity.ts';
-import { retailerAvailability, lookupRetailConnections } from '../worker/retailer-availability.ts';
+import { retailerAvailability, lookupRetailConnections, lookupRetailContext } from '../worker/retailer-availability.ts';
 
 const fixtureSource = JSON.parse(readFileSync(new URL('./fixtures/retailers/demo-coop.json', import.meta.url), 'utf8')) as RetailDataset;
 const start = Date.parse('2026-10-08T10:00:00.000Z');
@@ -28,22 +28,53 @@ function makeFixture(now = start): RetailDataset {
 function makeDb() {
   const db = new LocalDatabase(':memory:');
   db.execute(retailSchema());
-  const metrics = { connections: 0, products: 0 };
+  const metrics = { connections: 0, products: 0, metadata: 0, activeRuns: 0, activeChecks: 0,
+    batchCalls: 0, failActiveCheck: false };
   const d1 = { prepare(sql: string) {
     let params: Array<string | number | null> = [];
     const statement: any = { bind(...values: Array<string | number | null>) { params = values; return statement; },
-      async first() { return (await rows(db, sql, params))[0] ?? null; },
+      async first() {
+        const normalized = sql.toLowerCase();
+        if (normalized.includes('join retail_runs')) metrics.activeRuns++;
+        if (normalized.includes('select s.active_run_id')) metrics.activeChecks++;
+        const result = (await rows(db, sql, params))[0] ?? null;
+        return metrics.failActiveCheck && normalized.includes('select s.active_run_id') && result
+          ? { ...result, active_run_id: 'changed-active-run' } : result;
+      },
       async all() {
         const normalized = sql.toLowerCase();
+        if (normalized.includes('select s.active_run_id')) metrics.activeChecks++;
+        if (normalized.includes('join retail_runs')) metrics.activeRuns++;
         if (normalized.includes('from retail_connections')) metrics.connections++;
         if (normalized.includes('from retail_products')) metrics.products++;
-        return { results: await rows(db, sql, params), success: true };
+        if (normalized.includes('from retail_meta')) metrics.metadata++;
+        let results=await rows(db, sql, params);
+        if(metrics.failActiveCheck&&normalized.includes('select s.active_run_id'))results=results.map(row=>({...row,active_run_id:'changed-active-run'}));
+        return { results, success: true };
       },
       async run() { await db.query(sql, params); return { success: true }; },
     };
     return statement;
   } } as unknown as D1Database;
   return { db, d1, metrics };
+}
+
+function withReadBatch(seeded: D1Database,
+  db: LocalDatabase, metrics: ReturnType<typeof makeDb>['metrics']): D1Database {
+  return { ...seeded, async batch(statements: D1PreparedStatement[]) {
+    metrics.batchCalls++;
+    assert.ok(statements.length===2||statements.length===3,'publication and selected names use bounded read batches');
+    db.execute('BEGIN');
+    try {
+      const results = [];
+      for (const statement of statements) results.push(await statement.all());
+      db.execute('COMMIT');
+      return results;
+    } catch (error) {
+      db.execute('ROLLBACK');
+      throw error;
+    }
+  } } as unknown as D1Database;
 }
 
 async function seed(now = start, mutate?: (data: RetailDataset) => void) {
@@ -82,6 +113,86 @@ test('cold availability trusts the atomic publication summary; named lookup read
   assert.equal(links[2].productId, null);
   assert.equal(metrics.connections, 1);
   assert.equal(metrics.products, 1);
+});
+
+test('D1 publication batch returns a coherent metadata and active-run snapshot', async () => {
+  const seeded = await seed();
+  const batchedDb = withReadBatch(seeded.d1, seeded.db, seeded.metrics);
+  const current = await retailerAvailability({ COOP_DB: batchedDb }, manifest, 'coop', start);
+  const meta = Object.fromEntries((await rows(seeded.db, 'SELECT key,value FROM retail_meta')).map(row => [row.key, row.value]));
+  const active = (await rows(seeded.db, `SELECT s.active_run_id,r.id,r.report_json FROM retail_scope_state s
+    JOIN retail_runs r ON r.id=s.active_run_id WHERE s.scope_key=?`, [meta.reference_scope]))[0];
+  const summary = JSON.parse(String(active.report_json)).availabilitySummary;
+  assert.equal(current.current, true);
+  assert.equal(current.runId, active.id);
+  assert.equal(current.runId, active.active_run_id);
+  assert.equal(meta.retailer, 'coop');
+  assert.equal(meta.reference_scope, JSON.stringify(['coop', seeded.data.scope.storeId, 'pickup', null]));
+  assert.equal(meta.connections_version, summary.connectionsVersion);
+  assert.equal(meta.dataset_id, summary.datasetId);
+  assert.equal(meta.inventory_hash, summary.inventoryHash);
+  assert.equal(seeded.metrics.batchCalls, 1);
+  assert.equal(seeded.metrics.activeRuns, 1);
+  assert.equal(seeded.metrics.connections, 0);
+  assert.equal(seeded.metrics.products, 0);
+});
+
+test('invalid publication summary returned by the D1 batch fails closed without legacy reads', async () => {
+  const seeded = await seed();
+  const run = (await rows(seeded.db, 'SELECT id,report_json FROM retail_runs'))[0];
+  const report = JSON.parse(String(run.report_json));
+  report.availabilitySummary.checkedProductCount++;
+  await seeded.db.query('UPDATE retail_runs SET report_json=? WHERE id=?', [JSON.stringify(report), String(run.id)]);
+  const batchedDb = withReadBatch(seeded.d1, seeded.db, seeded.metrics);
+  const current = await retailerAvailability({ COOP_DB: batchedDb }, manifest, 'coop', start);
+  assert.equal(current.current, false);
+  assert.deepEqual(current.brokenNames, ['invalid_availability_summary']);
+  assert.equal(seeded.metrics.batchCalls, 1);
+  assert.equal(seeded.metrics.activeRuns, 1);
+  assert.equal(seeded.metrics.connections, 0);
+  assert.equal(seeded.metrics.products, 0);
+});
+
+test('batched named reads isolate malformed reviews and reject a changed active publication', async () => {
+  const seeded=await seed();
+  await seeded.db.query("UPDATE retail_connections SET document_json='invalid json' WHERE ingredient_name='onion'");
+  const db=withReadBatch(seeded.d1,seeded.db,seeded.metrics);
+  const context=await lookupRetailContext({COOP_DB:db},manifest,'coop',['rice','onion'],start);
+  assert.equal(context.availability.current,true);
+  assert.equal(context.links[0].productId,'demo-rice-1kg');
+  assert.equal(context.links[1].productId,null);
+  assert.equal(context.links[1].status,'needs_review');
+  assert.equal(seeded.metrics.batchCalls,2,'publication and selected rows each need one binding call');
+  seeded.metrics.failActiveCheck=true;
+  const changed=await lookupRetailContext({COOP_DB:db},manifest,'coop',['rice'],start);
+  assert.equal(changed.availability.current,false);
+  assert.deepEqual(changed.links,[]);
+});
+
+test('lookup context performs one availability assessment and one strict active-run check', async () => {
+  const seeded = await seed();
+  const context = await lookupRetailContext({ COOP_DB: seeded.d1 }, manifest, 'coop', ['rice', 'onion'], start);
+  assert.equal(context.availability.current, true);
+  assert.deepEqual(context.links.map(link => link.name), ['rice', 'onion']);
+  assert.equal(seeded.metrics.metadata, 1);
+  assert.equal(seeded.metrics.activeRuns, 1);
+  assert.equal(seeded.metrics.activeChecks, 1);
+  assert.equal(seeded.metrics.connections, 1);
+  assert.equal(seeded.metrics.products, 1);
+});
+
+test('lookup context fails availability closed when the active run changes before named reads', async () => {
+  const seeded = await seed();
+  seeded.metrics.failActiveCheck = true;
+  const context = await lookupRetailContext({ COOP_DB: seeded.d1 }, manifest, 'coop', ['rice'], start);
+  assert.equal(context.availability.current, false);
+  assert.equal(context.availability.runId !== null, true);
+  assert.deepEqual(context.availability.brokenNames, ['active_run_changed']);
+  assert.deepEqual(context.links, []);
+  assert.equal(seeded.metrics.activeRuns, 1);
+  assert.equal(seeded.metrics.activeChecks, 1);
+  assert.equal(seeded.metrics.connections, 0);
+  assert.equal(seeded.metrics.products, 0);
 });
 
 test('new active run and connection version each invalidate the weak-map cache', async () => {
@@ -162,6 +273,24 @@ test('named lookup reads only requested records and missing connection IDs stay 
   assert.equal(links[0].productId, null);
   assert.equal(seeded.metrics.connections, 1);
   assert.equal(seeded.metrics.products, 0);
+});
+
+test('batched validation isolates a malformed selected connection while sharing identities', async () => {
+  const seeded = await seed(start, data => {
+    const rice = data.observations.find(observation => observation.product.id === 'demo-rice-1kg')!;
+    const onion = data.connections.find(connection => connection.name === 'onion')!;
+    onion.mainProductId = rice.product.id;
+    onion.approvedProducts = [{ productId: rice.product.id, identity: productIdentity(rice.product) }];
+  });
+  const onionRow = (await rows(seeded.db, "SELECT document_json FROM retail_connections WHERE ingredient_name='onion'"))[0];
+  const onion = JSON.parse(String(onionRow.document_json));
+  onion.policyVersion = 'stale-policy';
+  await seeded.db.query("UPDATE retail_connections SET document_json=? WHERE ingredient_name='onion'", [JSON.stringify(onion)]);
+  const links = await lookupRetailConnections({ COOP_DB: seeded.d1 }, manifest, 'coop', ['rice', 'onion'], start);
+  assert.equal(links[0].status, 'matched');
+  assert.equal(links[0].productId, 'demo-rice-1kg');
+  assert.equal(links[1].status, 'needs_review');
+  assert.equal(links[1].productId, null);
 });
 
 test('stale prices and changed identities break only affected names; missing connections fail closed', async () => {

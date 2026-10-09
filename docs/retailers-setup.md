@@ -8,6 +8,8 @@ Startscannen av Stora Coop Västberga (256600, pickup) omfattar 14 368 unika pro
 
 Alla fem receptimportdelar är klara och `/meal/status` visar `ready: true`. Det tillfälliga `meal-upload`-workflowet är avstängt. Daglig Coop-refresh är aktiverad. ICA har ingen godkänd automatisk produkt-/priskälla.
 
+Den nya beräkningsvägen via Durable Objects finns i källkoden, men dess slutliga driftsättning och CPU-prov återstår. API och dagsjobb fortsätter använda samma publika adress och kontrakt.
+
 ## Börja offline
 
 CLI:ns standardkommando är en syntetisk demo. Den använder en markerad testfixture, skapar en temporär lokal databas i minnet och visar både ändrad och oförändrad publicering samt en whole-package-korg. Den gör noll retailer- och Cloudflare-anrop.
@@ -123,6 +125,31 @@ För en lokal ICA-offert skickas bland annat butik och handelsform. Det svaret f
 
 Svar kan innehålla `priceMode`, `priceSource` (`reference-webshop` eller `local-webshop`), `datasetId`, `inventoryHash`, `policyVersion`, `pricedAt`, `earliestPriceExpiry`, `finalists`, `selectedMenuId`, `referenceCostIsEstimate` och `cheapestVerified`. Lokalofferten använder en snabb, märkt referensuppskattning och gör den riktiga korgoptimeringen med kundens lokala priser. Varje meny beräknas en gång; totalt högst 20 000 arbetssteg delas mellan finalisterna. Varje finalist redovisar korgens `complete`, `optimizationComplete`, `purchaseCostOre`, `consumedCostOre`, rader med antal hela paket/pant/restmängd samt olösta ingredienser. `complete` beskriver om alla kostnader kunde lösas; `optimizationComplete` anger om sökningen kunde bevisa bästa korgen inom beräkningsgränsen. Delad lokal priscache lagrar grupper av produktuppslag under en kort hashnyckel. Det undviker ett cacheanrop per produkt; varm minnescache återanvänds även mellan olika menyförslag. Inga kundofferter skrivs i D1. Lokalt webbshoppris är inte ett löfte om fysisk hyllkostnad eller leveransavgifter.
 
+## Beräkningslager och CPU-gränser
+
+Den publika Worker fungerar som en liten gateway: den hanterar `/health`, tillämpar samma bearer-tokenregler som tidigare (inklusive separat token för granskning) och skickar sedan den oförändrade begäran till `MealCompute`. Svaret, API-vägarna och behörighetsreglerna ändras inte. Beräkningen körs i en SQLite-baserad Durable Object-pool med 32 fasta shards. En hash av metod, URL och högst de första 4 096 råa body-byten väljer shard. Identiska anrop hamnar därför tillsammans även när request-ID:t ändras. Shard-affinitet behövs inte för korrekthet.
+
+Durable Object-klassen använder inte sin egen SQLite-lagring, sparar inga offerter permanent och startar inga larm, timers eller bakgrundsjobb. Den använder befintliga D1-bindningar; D1:s separata läs-/skrivkvoter gäller fortfarande. Den begränsade offertcachen delas i minne av objekten i samma isolate; Cache API används dessutom när det är tillgängligt. Minnescachen har högst 64 poster och 4 MiB nominellt sammanlagt, med högst 256 KiB per svar och 64 KiB per nyckel. Nycklarna omfattar begäran och aktuella data-/policy-/kopplingsversioner, aktiv körning och lokala mappningsidentiteter. Cacheträffar kontrollerar att körningen fortfarande är aktuell; utgångstiden begränsas av pris-, observation- och körningsfärskhet. Gränsen räknar UTF-8-innehåll och nycklar; JavaScripts faktiska heap innehåller även sträng- och objektoverhead. Samma cache delas så att 32 objekt inte kan multiplicera minnesbudgeten. Cacheinnehållet försvinner när isolaten stängs.
+
+På Free har den vanliga Worker-begäran 10 ms CPU-tak. Durable Object-begäran har 30 sekunders standardtak. Durable Objects på Free har dessutom högst 100 000 anrop per dag och 13 000 GB-sekunder per dag; aktiv tid omfattar även väntan på I/O medan objektet är aktivt. SQLite-baserade Durable Objects är tillgängliga på Free. Ingen betald plan eller AI-runtime används. Se Cloudflares aktuella [DO-gränser](https://developers.cloudflare.com/durable-objects/platform/limits/), [DO-prissättning och Free-kvoter](https://developers.cloudflare.com/durable-objects/platform/pricing/) och [Worker-gränser](https://developers.cloudflare.com/workers/platform/limits/).
+
+CPU-proven använder Cloudflare Analytics efter en kort probeperiod och är adaptivt samplade; de visar inte exakt vilken URL eller Worker-version som använde varje sample. Kör dem efter driftsättning och probe:
+
+```sh
+npm run worker:cpu -- --input data/worker-api-probe.json --output data/worker-cpu-report.json
+npm run compute:cpu -- --input data/worker-api-probe.json --output data/compute-cpu-report.json
+```
+
+`worker:cpu` har 8 ms som standardgräns och `compute:cpu` 200 ms. Båda avslutar med fel om nödvändiga Analytics-data saknas; Durable Object-provet kräver både invocations- och periodiska mätvärden. Mätvärdena är regressionsbevis för probeperioden, inte en garanti för alla framtida trafikmönster.
+
+Efter ändringar i kostpolicy eller identitetsregler kan den offline-genererade policycachen byggas om från den granskade artefakten. Kommandot gör inga nätverksanrop:
+
+```sh
+npm run policy:seed -- --input data/coop-reviewed-dataset-20261009.json --output src/dietary-policy-seed.ts
+```
+
+`npm run meal:quotes` är ett valfritt D1-underhållskommando som bygger kompakta receptprojektioner i `MEAL_DB`; det använder inte Durable Object-lagringen och skriver inte kundofferter. Det kontrollerar kontots dagskvot och reserverad delad marginal före skrivning. Kör det bara när en kvotkontroll har godkänt underhållet. Standardtilldelningen är högst 1 000 skrivningar, med 10 000 reserverade och 90 000 som gräns; `MEAL_QUOTE_WRITE_ALLOWANCE` och `MEAL_QUOTE_ACCOUNT_WRITES_FLOOR` kan styra dessa försiktigare.
+
 Förbrukningskostnaden summeras utan avrundning över alla produkter och avrundas sedan till hela ören. Enskilda raders visningsbelopp avrundas separat, så deras summa kan skilja något från totalsumman. Inköpskostnaden summerar produktens faktiska paket-/viktkostnad inklusive pant. Mängder under `1e-9` gram, milliliter eller styck, eller mängder som inte kan summeras med bibehållen numerisk precision, markeras som olösta i stället för att få nollkostnad.
 
 ## Driftkontroller
@@ -130,7 +157,7 @@ Förbrukningskostnaden summeras utan avrundning över alla produkter och avrunda
 1. **Klart:** verifiera Coop pickup-källa från GitHub Actions i körning [37904883640](https://github.com/addeqe/secretlol/actions/runs/37904883640).
 2. Före framtida molnskrivning ska den aktuella delade Cloudflare-kvoten fortfarande kontrolleras. Workflowets preflight gör samma kontroll inför refresh.
 3. **Klart:** installera Coop D1, driftsätt Worker-bindingen och publicera de granskade kopplingarna och spårade produkterna.
-4. **Klart:** normal uppdatering från GitHub Actions använder bara 376 granskade ID:n och har verifierad deltaförbrukning. Kundoffertens CPU följs separat, särskilt för större menyförslag.
+4. **Klart:** normal uppdatering från GitHub Actions använder bara 376 granskade ID:n och har verifierad deltaförbrukning. Durable Object-arkitekturen är driftsatt och har verifierats med 18 lyckade API-anrop, inklusive tre finalister med 32 recept vardera. Gateway-CPU och begränsningen i DO-telemetrin redovisas i [verifieringen](retailer-verification.md).
 5. ICA:s produkt-/priskälla återstår separat; detta Coop-jobb aktiverar aldrig ICA.
 
 Det vanliga kund-API:t och dagsjobbet behöver ingen betald AI-runtime. Fulla scans är en engångs-/återhämtningsåtgärd, inte en rutin. Upstream-begränsningar kan göra att bara en del av planen kan genomföras nästa arbetsdag.
