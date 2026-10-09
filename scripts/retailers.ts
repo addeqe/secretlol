@@ -137,7 +137,8 @@ async function main(){
       const ids=[...new Set(data.connections.flatMap(c=>c.approvedProducts.map(p=>p.productId)))];
       const obs=publicationObservations.filter(o=>ids.includes(o.product.id));budget(db,10*data.connections.length+10*ids.length+200);
       // Remote schema is installed as a separate, reviewed migration step.
-      await configureRetailDataset(db,data);const report=await publishRetailObservations(db,id,data.scope,obs,ids);
+      await configureRetailDataset(db,data);const published=await publishRetailObservations(db,id,data.scope,obs,ids);
+      const report={...published,...(db instanceof D1DatabaseClient?{rowsRead:db.rowsRead,rowsWritten:db.rowsWritten,sizeBytes:db.sizeBytes}:{})};
       save(args.output??`data/${id}-last-publication.json`,report);console.log(JSON.stringify(report,null,2));
     }finally{if(db instanceof LocalDatabase)db.close();}return;
   }
@@ -151,8 +152,9 @@ async function main(){
       const ids=(await rows(db,'SELECT product_id FROM retail_tracked ORDER BY product_id')).map(r=>String(r.product_id));
       const prior=await readRetailObservations(db,id,s,ids);
       budget(db,10);const obs=await collectTracked(c,s,ids,25,prior);
-      const report=await publishRetailObservations(db,id,s,obs,ids);
-      save(args.output??`data/${id}-last-refresh.json`,{...report,...(db instanceof D1DatabaseClient?{rowsRead:db.rowsRead,rowsWritten:db.rowsWritten}: {})});console.log(JSON.stringify(report,null,2));
+      const published=await publishRetailObservations(db,id,s,obs,ids);
+      const report={...published,...(db instanceof D1DatabaseClient?{rowsRead:db.rowsRead,rowsWritten:db.rowsWritten,sizeBytes:db.sizeBytes}:{})};
+      save(args.output??`data/${id}-last-refresh.json`,report);console.log(JSON.stringify(report,null,2));
     }finally{if(db instanceof LocalDatabase)db.close();}return;
   }
   throw new Error('Commands: demo, capabilities, scan, archive, inventory, review, publish, refresh');

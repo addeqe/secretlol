@@ -12,11 +12,15 @@ export type RetailAvailability = { current: boolean; retailer: RetailerId; scope
 export type RetailConnectionLink = { retailer: RetailerId; ingredientId: string; name: string; status: string;
   productId: string | null; referencePrice: RetailPrice | null; expiresAt: string | null };
 
-type Run = { id: string; checked_at: string; expires_at: string; checked_ids_json: string };
+type Run = { id: string; checked_at: string; expires_at: string; checked_ids_json: string; report_json: string };
 type ConnectionRow = { ingredient_id: string; ingredient_name: string; status: string; document_json: string };
-type CachedState = { availability: RetailAvailability; connections: ReviewedConnection[];
-  observations: ProductObservation[];
-  health: Map<string, { status: string; productId: string | null }>; expiresAtMs: number };
+type AvailabilitySummary = { schemaVersion: 1; retailer: RetailerId; scopeKey: string; datasetId: string;
+  inventoryHash: string; policyVersion: string; connectionsVersion: string; distinctIngredients: number;
+  checkedProductCount: number; brokenNames: string[]; earliestPriceBoundary: string | null };
+type CachedState = { availability: RetailAvailability; connections?: ReviewedConnection[];
+  observations?: ProductObservation[]; health?: Map<string, { status: string; productId: string | null }>;
+  summary?: AvailabilitySummary; run?: Run; checkedIds?: Set<string>; links?: Map<string, RetailConnectionLink>;
+  expiresAtMs: number };
 type DbMeta = Record<string, string>;
 const stateCache = new WeakMap<object, Map<string, CachedState>>();
 const isHash = (value: unknown): value is string => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
@@ -83,7 +87,7 @@ async function assess(env: RetailAvailabilityEnv, manifest: RetailManifest, reta
     }
     const scope = parseScope(meta.reference_scope, retailer);
     if (!scope) return { availability: failure(retailer), state: null };
-    const run = await db.prepare(`SELECT r.id,r.checked_at,r.expires_at,r.checked_ids_json FROM retail_scope_state s
+    const run = await db.prepare(`SELECT r.id,r.checked_at,r.expires_at,r.checked_ids_json,r.report_json FROM retail_scope_state s
       JOIN retail_runs r ON r.id=s.active_run_id WHERE s.scope_key=?`).bind(meta.reference_scope)
       .first<Run>();
     if (!run || !run.id || !Number.isFinite(Date.parse(run.checked_at)) || !Number.isFinite(Date.parse(run.expires_at))
@@ -99,6 +103,56 @@ async function assess(env: RetailAvailabilityEnv, manifest: RetailManifest, reta
     const cache = cacheFor(db), cached = cache.get(cacheKey);
     if (cached && cached.expiresAtMs > now) return { availability: cached.availability, state: cached };
     if (cached) cache.delete(cacheKey);
+
+    let rawCheckedIds: unknown;
+    try { rawCheckedIds = JSON.parse(run.checked_ids_json); } catch {
+      return { availability: failure(retailer, scope, run.id, ['invalid_run_inventory']), state: null };
+    }
+    if (!Array.isArray(rawCheckedIds) || rawCheckedIds.some(id => !productId(id))
+      || new Set(rawCheckedIds).size !== rawCheckedIds.length) {
+      return { availability: failure(retailer, scope, run.id, ['invalid_run_inventory']), state: null };
+    }
+    const checkedIds = new Set<string>(rawCheckedIds);
+
+    let report: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(run.report_json) as unknown;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('invalid_report');
+      report = parsed as Record<string, unknown>;
+    } catch { return { availability: failure(retailer, scope, run.id, ['invalid_run_report']), state: null }; }
+    if (report.availabilitySummary !== undefined) {
+      const value = report.availabilitySummary as Partial<AvailabilitySummary> | null;
+      const brokenNames = value?.brokenNames;
+      const boundary = value?.earliestPriceBoundary;
+      const parsedBoundary = typeof boundary === 'string' ? Date.parse(boundary) : NaN;
+      const validBoundary = boundary === null || typeof boundary === 'string' && Number.isFinite(parsedBoundary)
+        && new Date(parsedBoundary).toISOString() === boundary;
+      if (value?.schemaVersion !== 1 || value.retailer !== retailer || value.scopeKey !== meta.reference_scope
+        || value.datasetId !== manifest.datasetId || value.inventoryHash !== manifest.inventoryHash
+        || value.policyVersion !== DIETARY_POLICY_VERSION || value.connectionsVersion !== connectionsVersion
+        || value.distinctIngredients !== manifest.distinctIngredients || value.checkedProductCount !== checkedIds.size
+        || !Array.isArray(brokenNames) || brokenNames.length > manifest.distinctIngredients
+        || brokenNames.some(name => typeof name !== 'string' || !name.trim() || name.length > 250)
+        || new Set(brokenNames).size !== brokenNames.length || !validBoundary
+        || report.id !== run.id || report.retailer !== retailer || report.checkedAt !== run.checked_at
+        || report.expiresAt !== run.expires_at) {
+        return { availability: failure(retailer, scope, run.id, ['invalid_availability_summary']), state: null };
+      }
+      const boundaryMs = boundary === null ? Infinity : Date.parse(boundary);
+      const checkedExpiry = Date.parse(run.checked_at) + 86400000;
+      if (boundaryMs > now) {
+        const expiryMs = Math.min(Date.parse(run.expires_at), checkedExpiry, boundaryMs);
+        if (expiryMs <= now) return { availability: failure(retailer, scope, run.id, ['availability_summary_expired']), state: null };
+        const summary = value as AvailabilitySummary;
+        const availability: RetailAvailability = { current: true, retailer, scope, runId: run.id,
+          brokenNames: [...brokenNames].sort(), expiresAt: new Date(expiryMs).toISOString() };
+        const state: CachedState = { availability, summary, run, checkedIds, expiresAtMs: expiryMs, links: new Map() };
+        if (cache.size >= 8 && !cache.has(cacheKey)) cache.delete(cache.keys().next().value!);
+        cache.set(cacheKey, state);
+        return { availability, state };
+      }
+      // A valid-from/valid-until edge changed health since publication; recompute it once from current rows.
+    }
 
     const connectionResult = await db.prepare(`SELECT ingredient_id,ingredient_name,status,document_json
       FROM retail_connections ORDER BY ingredient_name`).all<ConnectionRow>();
@@ -128,15 +182,6 @@ async function assess(env: RetailAvailabilityEnv, manifest: RetailManifest, reta
     if (approvedIds.length > 5000) {
       return { availability: failure(retailer, scope, run.id, connections.map(connection => connection.name)), state: null };
     }
-    let rawCheckedIds: unknown;
-    try { rawCheckedIds = JSON.parse(run.checked_ids_json); } catch {
-      return { availability: failure(retailer, scope, run.id, ['invalid_run_inventory']), state: null };
-    }
-    if (!Array.isArray(rawCheckedIds) || rawCheckedIds.some(id => !productId(id))
-      || new Set(rawCheckedIds).size !== rawCheckedIds.length) {
-      return { availability: failure(retailer, scope, run.id, ['invalid_run_inventory']), state: null };
-    }
-    const checkedIds = new Set<string>(rawCheckedIds);
     const tracked = new Set(allApproved);
     if ([...tracked].some(id => !checkedIds.has(id))) {
       for (const connection of connections) if (connection.status === 'matched'
@@ -174,23 +219,26 @@ async function assess(env: RetailAvailabilityEnv, manifest: RetailManifest, reta
       health.set(connection.ingredientId, { status: result.status, productId: result.productId });
       if (connection.status !== 'non_purchased' && result.status !== 'matched') brokenNames.add(connection.name);
     }
-    const expCandidates = [Date.parse(run.expires_at), now + 86400000];
+    const expCandidates = [Date.parse(run.expires_at), Date.parse(run.checked_at) + 86400000];
     for (const result of health.values()) {
       const observation = result.productId ? observations.find(item => item.product.id === result.productId) : undefined;
       if (!observation?.price) continue;
       const validUntil = observation.price.validUntil ? Date.parse(observation.price.validUntil) : NaN;
       const validFrom = observation.price.validFrom ? Date.parse(observation.price.validFrom) : NaN;
       if (Number.isFinite(validUntil) && validUntil > now) expCandidates.push(validUntil);
+      if (Number.isFinite(validFrom) && validFrom > now) expCandidates.push(validFrom);
     }
-    for (const observation of observations) {
-      const validFrom = observation.price?.validFrom ? Date.parse(observation.price.validFrom) : NaN;
+    for (const observation of observations) if (observation.price) {
+      const validUntil = observation.price.validUntil ? Date.parse(observation.price.validUntil) : NaN;
+      const validFrom = observation.price.validFrom ? Date.parse(observation.price.validFrom) : NaN;
+      if (Number.isFinite(validUntil) && validUntil > now) expCandidates.push(validUntil);
       if (Number.isFinite(validFrom) && validFrom > now) expCandidates.push(validFrom);
     }
     const expiryMs = Math.min(...expCandidates);
     const expiresAt = new Date(expiryMs).toISOString();
     const availability: RetailAvailability = { current: true, retailer, scope, runId: run.id,
       brokenNames: [...brokenNames].sort(), expiresAt };
-    const state: CachedState = { availability, connections, observations, health, expiresAtMs: expiryMs };
+    const state: CachedState = { availability, connections, observations, health, run, checkedIds, expiresAtMs: expiryMs };
     if (expiryMs > now) {
       if (cache.size >= 8 && !cache.has(cacheKey)) cache.delete(cache.keys().next().value!);
       cache.set(cacheKey, state);
@@ -206,21 +254,113 @@ export async function retailerAvailability(env: RetailAvailabilityEnv, manifest:
   return (await assess(env, manifest, retailer, now)).availability;
 }
 
+async function lookupPublishedNames(db: D1Database, retailer: RetailerId, scope: StoreScope,
+  state: CachedState, names: string[], now: number): Promise<Map<string, RetailConnectionLink> | null> {
+  const run = state.run, summary = state.summary, checkedIds = state.checkedIds;
+  if (!run || !summary || !checkedIds) return null;
+  const active = await db.prepare(`SELECT s.active_run_id,
+    (SELECT value FROM retail_meta WHERE key='connections_version') AS connections_version,
+    (SELECT value FROM retail_meta WHERE key='dataset_id') AS dataset_id,
+    (SELECT value FROM retail_meta WHERE key='inventory_hash') AS inventory_hash,
+    (SELECT value FROM retail_meta WHERE key='policy_version') AS policy_version
+    FROM retail_scope_state s WHERE s.scope_key=?`).bind(summary.scopeKey)
+    .first<{ active_run_id: string; connections_version: string; dataset_id: string; inventory_hash: string; policy_version: string }>();
+  if (active?.active_run_id !== run.id || active.connections_version !== summary.connectionsVersion
+    || active.dataset_id !== summary.datasetId || active.inventory_hash !== summary.inventoryHash
+    || active.policy_version !== summary.policyVersion) return null;
+
+  const unresolved = [...new Set(names)].filter(name => !state.links?.has(name));
+  if (!unresolved.length) return state.links ?? new Map();
+  const connectionResult = await db.prepare(`SELECT ingredient_id,ingredient_name,status,document_json FROM retail_connections
+    WHERE ingredient_name IN (SELECT value FROM json_each(?))`).bind(JSON.stringify(unresolved)).all<ConnectionRow>();
+  const wanted = new Set(unresolved);
+  const connections = new Map<string, ReviewedConnection>();
+  const invalid = new Set<string>();
+  for (const row of connectionResult.results) {
+    if (!wanted.has(row.ingredient_name)) continue;
+    try {
+      const connection = JSON.parse(row.document_json) as ReviewedConnection;
+      if (connection.ingredientId !== row.ingredient_id || connection.name !== row.ingredient_name
+        || connection.status !== row.status || connections.has(row.ingredient_name)) throw new Error('connection_row_mismatch');
+      validateConnections([connection], reviewedProducts(connection));
+      connections.set(connection.name, connection);
+    } catch { invalid.add(row.ingredient_name); }
+  }
+  const approvedIds = [...new Set([...connections.values()].flatMap(connection => connection.status === 'matched'
+    ? connection.approvedProducts.map(product => product.productId) : []))];
+  const missingFromRun = new Set([...connections.values()].flatMap(connection => connection.status === 'matched'
+    ? connection.approvedProducts.filter(product => !checkedIds.has(product.productId)).map(() => connection.name) : []));
+  const checkedApprovedIds = approvedIds.filter(id => checkedIds.has(id));
+  const stored = checkedApprovedIds.length ? await db.prepare(`SELECT product_id,observation_json FROM retail_products WHERE scope_key=?
+    AND product_id IN (SELECT value FROM json_each(?))`).bind(summary.scopeKey, JSON.stringify(checkedApprovedIds))
+    .all<{ product_id: string; observation_json: string }>() : { results: [] as Array<{ product_id: string; observation_json: string }> };
+  const expected = new Set(checkedApprovedIds);
+  const observations = new Map<string, ProductObservation>();
+  for (const row of stored.results) {
+    try {
+      const observation = JSON.parse(row.observation_json) as ProductObservation;
+      if (row.product_id !== observation.product.id || !expected.has(observation.product.id)
+        || observations.has(observation.product.id)) throw new Error('invalid_stored_observation');
+      const current = { ...observation, checkedAt: run.checked_at, expiresAt: run.expires_at };
+      validateObservation(current, retailer, scope);
+      observations.set(current.product.id, current);
+    } catch { /* A bad or missing selected row remains unavailable for this name. */ }
+  }
+  for (const name of unresolved) {
+    const connection = connections.get(name);
+    let status = 'needs_review', selectedId: string | null = null;
+    if (connection && !invalid.has(name) && !missingFromRun.has(name)) {
+      const health = connectionHealth(connection, connection.approvedProducts.flatMap(product => {
+        const observation = observations.get(product.productId);
+        return observation ? [observation] : [];
+      }), retailer, scope, now);
+      status = health.status;
+      selectedId = health.productId;
+      if (status === 'matched' && summary.brokenNames.includes(name)) {
+        // A mismatch between a selected row and the atomic publish summary is never allowed to fail open.
+        status = 'needs_review';
+        selectedId = null;
+      }
+    }
+    const selected = selectedId ? observations.get(selectedId) : undefined;
+    state.links?.set(name, { retailer, ingredientId: connection?.ingredientId ?? `missing:${name}`, name,
+      status, productId: selected?.product.id ?? null, referencePrice: selected?.price ?? null,
+      expiresAt: selected?.expiresAt ?? null });
+  }
+  return state.links ?? null;
+}
+
 export async function lookupRetailConnections(env: RetailAvailabilityEnv, manifest: RetailManifest,
   retailer: RetailerId, names: string[], now = Date.now()): Promise<RetailConnectionLink[]> {
   if (!Array.isArray(names) || names.length > 400 || names.some(name => typeof name !== 'string' || !name.trim())) return [];
   const { availability, state } = await assess(env, manifest, retailer, now);
   if (!availability.current || !state) return [];
-  const byName = new Map(state.connections.map(connection => [connection.name, connection]));
-  const byProductId = new Map(state.observations.map(observation => [observation.product.id, observation]));
+  let byName: Map<string, RetailConnectionLink>;
+  if (state.summary) {
+    const db = binding(env, retailer);
+    if (!db) return [];
+    const links = await lookupPublishedNames(db, retailer, availability.scope!, state, names, now);
+    if (!links) return [];
+    byName = links;
+  } else {
+    const connections = state.connections ?? [], observations = state.observations ?? [], health = state.health ?? new Map();
+    const byConnection = new Map(connections.map(connection => [connection.name, connection]));
+    const byProductId = new Map(observations.map(observation => [observation.product.id, observation]));
+    byName = new Map(names.map(name => {
+      const connection = byConnection.get(name);
+      if (!connection) return [name, { retailer, ingredientId: `missing:${name}`, name,
+        status: 'needs_review', productId: null, referencePrice: null, expiresAt: null }];
+      const checked = health.get(connection.ingredientId);
+      const observation = checked?.status === 'matched' && checked.productId ? byProductId.get(checked.productId) : undefined;
+      return [name, { retailer, ingredientId: connection.ingredientId, name: connection.name, status: checked?.status ?? 'needs_review',
+        productId: observation?.product.id ?? null, referencePrice: observation?.price ?? null,
+        expiresAt: observation?.expiresAt ?? null }];
+    }));
+  }
   return names.map(name => {
-    const connection = byName.get(name);
-    if (!connection) return { retailer, ingredientId: `missing:${name}`, name,
+    const link = byName.get(name);
+    if (!link) return { retailer, ingredientId: `missing:${name}`, name,
       status: 'needs_review', productId: null, referencePrice: null, expiresAt: null };
-    const health = state.health.get(connection.ingredientId);
-    const observation = health?.status === 'matched' && health.productId ? byProductId.get(health.productId) : undefined;
-    return { retailer, ingredientId: connection.ingredientId, name: connection.name, status: health?.status ?? 'needs_review',
-      productId: observation?.product.id ?? null, referencePrice: observation?.price ?? null,
-      expiresAt: observation?.expiresAt ?? null };
+    return link;
   });
 }

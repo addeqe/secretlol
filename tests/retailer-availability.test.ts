@@ -46,15 +46,25 @@ function makeDb() {
   return { db, d1, metrics };
 }
 
-async function seed(now = start) {
+async function seed(now = start, mutate?: (data: RetailDataset) => void) {
   const database = makeDb(), data = makeFixture(now);
+  mutate?.(data);
   await configureRetailDataset(database.db, data);
-  await publishRetailObservations(database.db, data.retailer, data.scope, data.observations,
-    data.observations.map(observation => observation.product.id), now);
+  const tracked = new Set(data.connections.flatMap(connection => connection.approvedProducts.map(product => product.productId)));
+  const observations = data.observations.filter(observation => tracked.has(observation.product.id));
+  await publishRetailObservations(database.db, data.retailer, data.scope, observations,
+    observations.map(observation => observation.product.id), now);
   return { ...database, data };
 }
 
-test('cold availability validates all connections and products; warm lookup reuses cached state', async () => {
+async function removeAvailabilitySummary(db: LocalDatabase) {
+  const run = (await rows(db, 'SELECT id,report_json FROM retail_runs ORDER BY checked_at DESC LIMIT 1'))[0];
+  const report = JSON.parse(String(run.report_json));
+  delete report.availabilitySummary;
+  await db.query('UPDATE retail_runs SET report_json=? WHERE id=?', [JSON.stringify(report), String(run.id)]);
+}
+
+test('cold availability trusts the atomic publication summary; named lookup reads only requested rows', async () => {
   const { d1, metrics, data } = await seed();
   const env = { COOP_DB: d1 };
   const current = await retailerAvailability(env, manifest, 'coop', start);
@@ -62,8 +72,8 @@ test('cold availability validates all connections and products; warm lookup reus
   assert.equal(current.scope?.storeId, data.scope.storeId);
   assert.ok(current.runId);
   assert.equal(current.brokenNames.length, 0);
-  assert.equal(metrics.connections, 1);
-  assert.equal(metrics.products, 1);
+  assert.equal(metrics.connections, 0);
+  assert.equal(metrics.products, 0);
   const links = await lookupRetailConnections(env, manifest, 'coop', ['rice', 'onion', 'not in inventory'], start);
   assert.equal(links.length, 3);
   assert.equal(links[0].productId, 'demo-rice-1kg');
@@ -79,21 +89,84 @@ test('new active run and connection version each invalidate the weak-map cache',
   const env = { COOP_DB: d1 };
   await retailerAvailability(env, manifest, 'coop', start);
   await retailerAvailability(env, manifest, 'coop', start);
-  assert.equal(metrics.connections, 1);
+  assert.equal(metrics.connections, 0);
   const later = start + 120_000;
   const refreshed = makeFixture(later);
   await publishRetailObservations(db, 'coop', refreshed.scope, refreshed.observations,
     refreshed.observations.map(observation => observation.product.id), later);
   assert.notEqual((await retailerAvailability(env, manifest, 'coop', later)).runId, null);
-  assert.equal(metrics.connections, 2);
+  assert.equal(metrics.connections, 0);
   await db.query("UPDATE retail_meta SET value='v2' WHERE key='connections_version'");
-  assert.equal((await retailerAvailability(env, manifest, 'coop', later)).current, true);
-  assert.equal(metrics.connections, 3);
+  assert.equal((await retailerAvailability(env, manifest, 'coop', later)).current, false);
+  assert.equal(metrics.connections, 0);
   assert.equal(data.connections.length, manifest.distinctIngredients);
+});
+
+test('publication summary contains unavailable names and invalid summaries fail closed', async () => {
+  const unavailable = await seed(start, data => {
+    const eggs = data.connections.find(connection => connection.name === 'eggs')!;
+    eggs.status = 'unavailable'; eggs.mainProductId = null; eggs.approvedProducts = [];
+  });
+  const current = await retailerAvailability({ COOP_DB: unavailable.d1 }, manifest, 'coop', start);
+  assert.equal(current.current, true);
+  assert.deepEqual(current.brokenNames, ['eggs']);
+  assert.equal(unavailable.metrics.connections, 0);
+  const reportRow = (await rows(unavailable.db, 'SELECT report_json FROM retail_runs'))[0];
+  const report = JSON.parse(String(reportRow.report_json));
+  assert.equal(report.availabilitySummary.distinctIngredients, manifest.distinctIngredients);
+  assert.equal(report.availabilitySummary.checkedProductCount, unavailable.data.connections
+    .flatMap(connection => connection.approvedProducts).length);
+  assert.deepEqual(report.availabilitySummary.brokenNames, ['eggs']);
+
+  const invalid = await seed();
+  const row = (await rows(invalid.db, 'SELECT id,report_json FROM retail_runs'))[0];
+  const bad = JSON.parse(String(row.report_json));
+  bad.availabilitySummary.checkedProductCount += 1;
+  await invalid.db.query('UPDATE retail_runs SET report_json=? WHERE id=?', [JSON.stringify(bad), String(row.id)]);
+  const rejected = await retailerAvailability({ COOP_DB: invalid.d1 }, manifest, 'coop', start);
+  assert.equal(rejected.current, false);
+  assert.deepEqual(rejected.brokenNames, ['invalid_availability_summary']);
+  assert.equal(invalid.metrics.connections, 0);
+  assert.equal(invalid.metrics.products, 0);
+
+  const missingRunId = await seed();
+  const activeRun = (await rows(missingRunId.db, 'SELECT r.id,r.checked_ids_json FROM retail_scope_state s JOIN retail_runs r ON r.id=s.active_run_id'))[0];
+  const checked = JSON.parse(String(activeRun.checked_ids_json)) as string[];
+  checked.pop();
+  await missingRunId.db.query('UPDATE retail_runs SET checked_ids_json=? WHERE id=?', [JSON.stringify(checked), String(activeRun.id)]);
+  assert.equal((await retailerAvailability({ COOP_DB: missingRunId.d1 }, manifest, 'coop', start)).current, false);
+});
+
+test('publisher refuses stale policy metadata before creating a trusted summary', async () => {
+  const seeded = await seed();
+  await seeded.db.query("UPDATE retail_meta SET value='older-policy' WHERE key='policy_version'");
+  await assert.rejects(() => publishRetailObservations(seeded.db, 'coop', seeded.data.scope,
+    seeded.data.observations, seeded.data.observations.map(observation => observation.product.id), start),
+  /retail_policy_version_mismatch/);
+});
+
+test('legacy runs without a summary use the old full validation path', async () => {
+  const legacy = await seed();
+  await removeAvailabilitySummary(legacy.db);
+  const current = await retailerAvailability({ COOP_DB: legacy.d1 }, manifest, 'coop', start);
+  assert.equal(current.current, true);
+  assert.equal(legacy.metrics.connections, 1);
+  assert.equal(legacy.metrics.products, 1);
+});
+
+test('named lookup reads only requested records and missing connection IDs stay unresolved', async () => {
+  const seeded = await seed();
+  await seeded.db.query("DELETE FROM retail_connections WHERE ingredient_name='rice'");
+  const links = await lookupRetailConnections({ COOP_DB: seeded.d1 }, manifest, 'coop', ['rice'], start);
+  assert.equal(links[0].status, 'needs_review');
+  assert.equal(links[0].productId, null);
+  assert.equal(seeded.metrics.connections, 1);
+  assert.equal(seeded.metrics.products, 0);
 });
 
 test('stale prices and changed identities break only affected names; missing connections fail closed', async () => {
   const stale = await seed();
+  await removeAvailabilitySummary(stale.db);
   const rice = stale.data.observations.find(observation => observation.product.id === 'demo-rice-1kg')!;
   rice.price!.validUntil = new Date(start - 1).toISOString();
   await stale.db.query('UPDATE retail_products SET observation_json=? WHERE product_id=?', [JSON.stringify(rice), rice.product.id]);
@@ -102,6 +175,7 @@ test('stale prices and changed identities break only affected names; missing con
   assert.ok(staleResult.brokenNames.includes('rice'));
 
   const changed = await seed();
+  await removeAvailabilitySummary(changed.db);
   const changedRice = changed.data.observations.find(observation => observation.product.id === 'demo-rice-1kg')!;
   changedRice.product.name = 'Different product';
   await changed.db.query('UPDATE retail_products SET observation_json=? WHERE product_id=?', [JSON.stringify(changedRice), changedRice.product.id]);
@@ -111,6 +185,7 @@ test('stale prices and changed identities break only affected names; missing con
   assert.equal(changedResult.brokenNames.length, 1);
 
   const missing = await seed();
+  await removeAvailabilitySummary(missing.db);
   await missing.db.query("DELETE FROM retail_connections WHERE ingredient_name='rice'");
   await missing.db.query("UPDATE retail_meta SET value='v2' WHERE key='connections_version'");
   const missingResult = await retailerAvailability({ COOP_DB: missing.d1 }, manifest, 'coop', start);
@@ -122,6 +197,7 @@ test('stale prices and changed identities break only affected names; missing con
   assert.equal((await retailerAvailability({ COOP_DB: noVersion.d1 }, manifest, 'coop', start)).current, false);
 
   const invalidWater = await seed();
+  await removeAvailabilitySummary(invalidWater.db);
   const invalidRice = invalidWater.data.connections.find(connection => connection.name === 'rice')!;
   invalidRice.status = 'non_purchased'; invalidRice.mainProductId = null; invalidRice.approvedProducts = [];
   await invalidWater.db.query("UPDATE retail_connections SET status='non_purchased',document_json=? WHERE ingredient_name='rice'", [JSON.stringify(invalidRice)]);
@@ -133,6 +209,7 @@ test('stale prices and changed identities break only affected names; missing con
 
 test('a fresh coherent run remains current when some connections need review; valid reserves are selected', async () => {
   const { db, d1, data } = await seed();
+  await removeAvailabilitySummary(db);
   const unavailable = data.connections.find(connection => connection.name === 'eggs')!;
   unavailable.status = 'unavailable'; unavailable.mainProductId = null; unavailable.approvedProducts = [];
   await db.query("UPDATE retail_connections SET status='unavailable',document_json=? WHERE ingredient_name='eggs'", [JSON.stringify(unavailable)]);
@@ -142,6 +219,7 @@ test('a fresh coherent run remains current when some connections need review; va
   assert.deepEqual(availability.brokenNames, ['eggs']);
 
   const reserve = await seed();
+  await removeAvailabilitySummary(reserve.db);
   const riceConnection = reserve.data.connections.find(connection => connection.name === 'rice')!;
   const rice = reserve.data.observations.find(observation => observation.product.id === 'demo-rice-1kg')!;
   const onion = reserve.data.observations.find(observation => observation.product.id === 'demo-onion-each')!;
@@ -186,14 +264,21 @@ test('more than 400 approved IDs remain within full-inventory bounds', async () 
   assert.deepEqual(availability.brokenNames, []);
 });
 
-test('future valid-from price boundaries expire cached state at the boundary', async () => {
+test('future valid-from price boundaries trigger a current-time health recomputation', async () => {
   const seeded = await seed();
   const rice = seeded.data.observations.find(observation => observation.product.id === 'demo-rice-1kg')!;
+  rice.checkedAt = new Date(start + 1_000).toISOString();
   rice.price!.validFrom = new Date(start + 5 * 60_000).toISOString();
-  await seeded.db.query('UPDATE retail_products SET observation_json=? WHERE product_id=?', [JSON.stringify(rice), rice.product.id]);
+  await publishRetailObservations(seeded.db, 'coop', seeded.data.scope, seeded.data.observations,
+    seeded.data.observations.map(observation => observation.product.id), start);
   const result = await retailerAvailability({ COOP_DB: seeded.d1 }, manifest, 'coop', start);
   assert.equal(result.current, true);
   assert.ok(result.expiresAt);
   assert.equal(Date.parse(result.expiresAt!), start + 5 * 60_000);
   assert.ok(result.brokenNames.includes('rice'));
+  const afterBoundary = await retailerAvailability({ COOP_DB: seeded.d1 }, manifest, 'coop', start + 5 * 60_000);
+  assert.equal(afterBoundary.current, true);
+  assert.ok(!afterBoundary.brokenNames.includes('rice'));
+  assert.equal(seeded.metrics.connections, 1);
+  assert.equal(seeded.metrics.products, 1);
 });
