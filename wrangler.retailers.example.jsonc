@@ -6,7 +6,6 @@
   "workers_dev": true,
   "triggers": { "crons": ["17 4 * * *"] },
   "vars": {
-    "PRICE_MAX_AGE_HOURS": "24",
     "RETAILERS_LIVE_ENABLED": "false"
   },
   "d1_databases": [

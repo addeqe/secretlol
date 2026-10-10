@@ -1,3 +1,4 @@
+import { calendarWeekEnd, scanIsCurrent } from '../src/price-freshness.ts';
 /** Isolate-local cache for immutable/versioned meal availability results. */
 type Availability={broken:string[];expiresAt:number};
 export type AvailabilityRow={ingredient_name:string;status:string;code:string|null;observed_at?:string|null;data_json:string|null};
@@ -50,9 +51,10 @@ export function calculateMealAvailability(rows:AvailabilityRow[],now:number){
     if(!row.code||!row.data_json){broken.add(row.ingredient_name);continue;}
     const data=JSON.parse(row.data_json),observed=Date.parse(row.observed_at??data.observedAt);
     if((data.available!==true&&data.available!==1)||!Number.isFinite(observed)){broken.add(row.ingredient_name);continue;}
-    const staleAt=observed+86400000,futureUntil=observed-60000;
+    const staleAt=calendarWeekEnd(observed),futureUntil=observed-60000;
     if(staleAt>now)nextChange=Math.min(nextChange,staleAt);else broken.add(row.ingredient_name);
     if(futureUntil>now){nextChange=Math.min(nextChange,futureUntil);broken.add(row.ingredient_name);}
+    if(!scanIsCurrent(observed,now)){broken.add(row.ingredient_name);if(staleAt>calendarWeekEnd(now))nextChange=Math.min(nextChange,calendarWeekEnd(now));}
     const observedSecond=Math.floor(observed/1000)*1000;
     for(const offer of data.offers??[]){const expiry=offer?.validUntil;if(typeof expiry==='number'&&expiry>observedSecond){if(expiry<=now)broken.add(row.ingredient_name);else nextChange=Math.min(nextChange,expiry);}}
   }

@@ -1,3 +1,4 @@
+import { calendarWeekEnd } from '../price-freshness.ts';
 import type { ProductObservation, RetailCategory, RetailClient, RetailPage, StoreScope } from './types.ts';
 import { RetailerUnsupportedError, scopeKey, validateScope } from './types.ts';
 import { validateObservation } from './identity.ts';
@@ -98,7 +99,7 @@ export async function collectTracked(client:RetailClient,scope:StoreScope,ids:st
     const confirmation=await readGroup(first.missing);append(confirmation.found);
     for(const id of confirmation.missing){
       const prior=priorById.get(id);if(!prior)throw new Error('confirmed_missing_product_without_prior_identity');
-      const now=Date.now(),checkedAt=new Date(now).toISOString(),expiresAt=new Date(now+24*60*60_000).toISOString();
+      const now=Date.now(),checkedAt=new Date(now).toISOString(),expiresAt=new Date(calendarWeekEnd(now)).toISOString();
       const identityEvidence=prior.identityEvidence??{status:'prior' as const,lastVerifiedAt:prior.checkedAt};
       const retained:ProductObservation={...prior,price:null,availability:'unknown',checkedAt,expiresAt,
         storeScopeVerified:false,identityEvidence};

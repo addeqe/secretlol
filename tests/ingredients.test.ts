@@ -15,6 +15,7 @@ import type {Entry,Scan,Statement} from '../src/types.ts';
 import {FOOD_RULES} from '../src/ingredient-vocabulary.ts';
 import {normalizeText} from '../src/ingredient-matching.ts';
 import {ingredientPolicy,productPolicy,DIETARY_POLICY_VERSION} from '../src/dietary-policy.ts';
+import {calendarWeekEnd} from '../src/price-freshness.ts';
 
 const date=()=>new Date().toISOString();
 function product(code:string,name:string,price:number,pack:string,category='Mejeri, ost & ägg'):Entry{
@@ -63,7 +64,7 @@ test('required salt, virgin oil, lean meat and preparation modifiers survive mat
 });
 test('stale, unavailable and conditionally priced products do not win',()=>{
   const a=eggs('A',10,20),b=eggs('B',15,20),c=eggs('C',20,20),d=eggs('D',40,20);
-  a.available=false;b.observedAt=new Date(Date.now()-25*3600000).toISOString();
+  a.available=false;b.observedAt=new Date(calendarWeekEnd(Date.now()-7*86_400_000)-1).toISOString();
   c.offers=[{applied:true,qualifyingCount:2,campaignType:'GENERAL'}];
   assert.equal(buildLinks([requirements[0]],[a,b,c,d])[0].selectedCode,'D');
 });
@@ -113,7 +114,8 @@ test('incomplete or stale catalogue leaves the last connection version untouched
     await d.query('UPDATE snapshots SET product_count=99');await assert.rejects(refreshIngredientLinks(d,inv),/Incomplete/);
     assert.equal((await rows(d,"SELECT value FROM catalog_state WHERE key='active_ingredient_run'"))[0].value,first.runId);
     await d.query('UPDATE snapshots SET product_count=1');
-    await d.query('UPDATE catalog_snapshot_storage SET oldest_observation_at=? WHERE snapshot_id=(SELECT value FROM catalog_state WHERE key=\'active_snapshot\')',[new Date(Date.now()-25*3600000).toISOString()]);
+    const priorWeekObservation=calendarWeekEnd(Date.now()-7*86_400_000)-1;
+    await d.query('UPDATE catalog_snapshot_storage SET oldest_observation_at=? WHERE snapshot_id=(SELECT value FROM catalog_state WHERE key=\'active_snapshot\')',[new Date(priorWeekObservation).toISOString()]);
     await assert.rejects(refreshIngredientLinks(d,inv),/stale/);
     assert.equal((await rows(d,"SELECT value FROM catalog_state WHERE key='active_ingredient_run'"))[0].value,first.runId);
   }finally{d.close();}

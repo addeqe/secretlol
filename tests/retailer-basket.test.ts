@@ -508,10 +508,13 @@ test('never treats a kg or litre price as a fixed package price for an incompati
   assert.equal(litreGrams.purchaseCostOre, null);
 });
 
-test('rejects stale or implausibly long observation windows even when expiry is still in the future', () => {
-  const tooOld = observed('old', 100, 100, { checkedAt: '2026-10-07T08:00:00Z', expiresAt: '2026-10-09T12:00:00Z' });
-  const tooLong = observed('long', 100, 100, { checkedAt: '2026-10-08T09:00:00Z', expiresAt: '2026-10-09T12:00:00Z' });
-  const result = optimizeBasket(request([demand('flour', 100, ['old', 'long'])], [tooOld, tooLong]));
+test('accepts a scan over 24 hours old in the same week and rejects prior-week or overlong windows', () => {
+  const oldButCurrent = observed('old-current-week', 100, 100, { checkedAt: '2026-10-07T08:00:00Z', expiresAt: '2026-10-11T22:00:00Z' });
+  const previousWeek = observed('previous-week', 100, 100, { checkedAt: '2026-10-04T08:00:00Z', expiresAt: '2026-10-11T22:00:00Z' });
+  const tooLong = observed('long', 100, 100, { checkedAt: '2026-10-08T09:00:00Z', expiresAt: '2026-10-12T00:00:00Z' });
+  const accepted = optimizeBasket(request([demand('flour', 100, ['old-current-week'])], [oldButCurrent]));
+  assert.equal(accepted.complete, true);
+  const result = optimizeBasket(request([demand('flour', 100, ['previous-week', 'long'])], [previousWeek, tooLong]));
   assert.equal(result.complete, false);
   assert.equal(result.purchaseCostOre, null);
 });

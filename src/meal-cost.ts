@@ -1,3 +1,4 @@
+import {scanIsCurrent} from './price-freshness.ts';
 // Conversions use the US customary recipe measures of the source dataset.
 // Density, edible piece weight and optional quantities are never invented.
 import {referenceAmount, type ReferenceAmountResult} from './meal-conversions.ts';
@@ -31,7 +32,7 @@ export function sourcedAmount(ingredient:IngredientAmount,scale=1):ReferenceAmou
 export function calculateLine(ingredient:IngredientAmount,product:CostProduct|null,status:string,scale:number,override?:AmountOverride){
   if(status==='non_purchased')return {status:'not_purchased',consumedCostOre:0,amount:null,reason:null,product:null};
   if(status!=='matched'||!product)return {status:'unresolved',consumedCostOre:null,amount:null,reason:'ingredient_connection_unavailable',product};
-  if(!product.available||!Number.isFinite(Date.parse(product.expiresAt))||Date.parse(product.expiresAt)<=Date.now()||Date.parse(product.observedAt)>Date.now()+60000)return {status:'unresolved',consumedCostOre:null,amount:null,reason:'product_unavailable_or_stale',product};
+  if(!product.available||!Number.isFinite(Date.parse(product.expiresAt))||Date.parse(product.expiresAt)<=Date.now()||!scanIsCurrent(Date.parse(product.observedAt)))return {status:'unresolved',consumedCostOre:null,amount:null,reason:'product_unavailable_or_stale',product};
   if(product.priceOre===null||product.priceOre<0||product.depositOre===null)return {status:'unresolved',consumedCostOre:null,amount:null,reason:'price_unknown',product};
   const converted=canonicalAmount(ingredient,scale,override);
   if(!converted.amount)return {status:'unresolved',consumedCostOre:null,...converted,product};

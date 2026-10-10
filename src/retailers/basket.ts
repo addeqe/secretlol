@@ -1,3 +1,4 @@
+import { calendarWeekEnd, scanIsCurrent } from '../price-freshness.ts';
 import { reviewedProductPolicy } from './identity.ts';
 import { scopeKey } from './types.ts';
 import type { BasketLine, BasketRequest, BasketResult, IngredientDemand, MenuFinalist, ProductObservation, RankedMenu } from './types.ts';
@@ -85,8 +86,8 @@ function observationCurrent(o: ProductObservation, request: BasketRequest, now: 
   const checked = timeValue(o.checkedAt), expiry = timeValue(o.expiresAt);
   return o.retailer === request.retailer && scopeKey(o.retailer, o.scope) === scopeKey(request.retailer, request.scope)
     && o.storeScopeVerified && o.availability === 'available' && checked !== null && expiry !== null
-    && checked <= now + 60_000 && expiry > now && now - checked < 86_400_000
-    && expiry > checked && expiry - checked <= 86_400_000;
+    && checked <= now + 60_000 && expiry > now && scanIsCurrent(checked, now)
+    && expiry > checked && expiry <= calendarWeekEnd(checked);
 }
 
 function optionFailure(o: ProductObservation, group: Group, request: BasketRequest, now: number): string | null {

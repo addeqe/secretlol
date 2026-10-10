@@ -1,3 +1,5 @@
+import { calendarWeekEnd, scanIsCurrent } from '../price-freshness.ts';
+import { referenceObservation } from './freshness.ts';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { DIETARY_POLICY_VERSION } from '../dietary-policy.ts';
@@ -80,13 +82,13 @@ export async function publishRetailObservations(db: Database, retailer: Retailer
     || observations.some(o=>!ids.includes(o.product.id))) throw new Error('incomplete_tracked_refresh');
   for (const o of observations) {
     validateObservation(o,retailer,scope);
-    if (Date.parse(o.checkedAt) > now+60000 || now-Date.parse(o.checkedAt)>=86400000 || Date.parse(o.expiresAt)<=now) throw new Error('stale_refresh_observation');
+    if (!scanIsCurrent(Date.parse(o.checkedAt),now) || Date.parse(o.expiresAt)<=now) throw new Error('stale_refresh_observation');
   }
   const tracked = (await rows(db,'SELECT product_id FROM retail_tracked ORDER BY product_id')).map(r=>String(r.product_id));
   if (JSON.stringify(ids)!==JSON.stringify(tracked)) throw new Error('tracked_inventory_mismatch');
   const previous = new Map((await rows(db,'SELECT product_id,content_hash,price_hash FROM retail_products WHERE scope_key=?',[key])).map(r=>[String(r.product_id),r]));
   const id=randomUUID(), checkedAt=new Date(Math.min(...observations.map(o=>Date.parse(o.checkedAt)))).toISOString();
-  const expiresAt=new Date(Math.min(...observations.map(o=>Date.parse(o.expiresAt)))).toISOString();
+  const expiresAt=new Date(calendarWeekEnd(Date.parse(checkedAt))).toISOString();
   const statements: Statement[]=[];let changed=0, priceChanges=0;
   for (const o of observations) {
     const contentHash=hash({product:o.product,identityEvidence:o.identityEvidence??null,price:o.price,
@@ -160,6 +162,6 @@ export async function readRetailObservations(db: Database, retailer: RetailerId,
   return (await rows(db,`SELECT observation_json FROM retail_products WHERE scope_key=?
     AND product_id IN (SELECT value FROM json_each(?))`,[key,JSON.stringify(ids)])).map(r=>{
       const o=JSON.parse(String(r.observation_json)) as ProductObservation;
-      return verified.has(o.product.id)?{...o,checkedAt:String(run.checked_at),expiresAt:String(run.expires_at)}:o;
+      return referenceObservation(o,verified.has(o.product.id)?String(run.checked_at):o.checkedAt);
     });
 }

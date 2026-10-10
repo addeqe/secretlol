@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { LocalDatabase, rows } from '../src/database.ts';
 import { retailSchema, configureRetailDataset, publishRetailObservations, type RetailDataset } from '../src/retailers/storage.ts';
 import { productIdentity } from '../src/retailers/identity.ts';
+import { calendarWeekEnd } from '../src/price-freshness.ts';
 import { retailerAvailability, lookupRetailConnections, lookupRetailContext } from '../worker/retailer-availability.ts';
 
 const fixtureSource = JSON.parse(readFileSync(new URL('./fixtures/retailers/demo-coop.json', import.meta.url), 'utf8')) as RetailDataset;
@@ -94,6 +95,31 @@ async function removeAvailabilitySummary(db: LocalDatabase) {
   delete report.availabilitySummary;
   await db.query('UPDATE retail_runs SET report_json=? WHERE id=?', [JSON.stringify(report), String(run.id)]);
 }
+
+test('legacy 24-hour run expiry supports current-week search and named links without full-table reads', async () => {
+  const {db,d1,metrics} = await seed();
+  try {
+    const run = (await rows(db,'SELECT id,checked_at,report_json FROM retail_runs'))[0];
+    const oldExpiry = new Date(Date.parse(String(run.checked_at)) + 86_400_000).toISOString();
+    const report = JSON.parse(String(run.report_json));
+    report.expiresAt = oldExpiry;
+    await db.query('UPDATE retail_runs SET expires_at=?,report_json=? WHERE id=?',
+      [oldExpiry,JSON.stringify(report),String(run.id)]);
+    const now = start + 48 * 60 * 60_000;
+    assert.ok(Date.parse(oldExpiry) < now);
+    const env = {COOP_DB:d1};
+    const current = await retailerAvailability(env,manifest,'coop',now);
+    assert.equal(current.current,true);
+    assert.deepEqual(current.brokenNames,[]);
+    assert.equal(current.expiresAt,new Date(calendarWeekEnd(start)).toISOString());
+    assert.equal(metrics.connections,0,'weekly policy preserves the publication-summary fast path');
+    assert.equal(metrics.products,0);
+    const links = await lookupRetailConnections(env,manifest,'coop',['rice','onion'],now);
+    assert.ok(links.every(link=>link.status==='matched'));
+    assert.ok(links.every(link=>Date.parse(link.expiresAt!)===calendarWeekEnd(start)));
+    assert.equal((await retailerAvailability(env,manifest,'coop',calendarWeekEnd(start))).current,false);
+  } finally {db.close();}
+});
 
 test('cold availability trusts the atomic publication summary; named lookup reads only requested rows', async () => {
   const { d1, metrics, data } = await seed();

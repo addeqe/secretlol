@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { LocalDatabase, rows } from '../src/database.ts';
 import { productIdentity, type ReviewedConnection } from '../src/retailers/identity.ts';
 import { DIETARY_POLICY_VERSION } from '../src/dietary-policy.ts';
+import { scanIsCurrent } from '../src/price-freshness.ts';
 import { retailSchema, configureRetailDataset, publishRetailObservations, type RetailDataset } from '../src/retailers/storage.ts';
 import { MemoryObservationCache } from '../src/retailers/resolver.ts';
 import { scopeKey, type ProductObservation, type RetailClient, type StoreScope } from '../src/retailers/types.ts';
@@ -208,6 +209,33 @@ test('reference quote combines multiple recipes and rounds whole packs after sum
       ['demo-eggs-6', 1], ['demo-onion-each', 3], ['demo-rice-1kg', 2],
     ]);
     assert.equal(body.selectedMenuId, 'week');
+  } finally { db.close(); }
+});
+
+test('expired cheap approved alternative does not shorten the validity of the selected basket', async () => {
+  const data = fixture();
+  const rice = data.observations.find(o => o.product.id === 'demo-rice-1kg')!;
+  const now = Date.now();
+  const alternateId = 'demo-rice-expired-promo';
+  const alternate = structuredClone(rice);
+  alternate.product = { ...alternate.product, id: alternateId };
+  alternate.checkedAt = new Date(now - 60 * 60_000).toISOString();
+  alternate.price = { ...alternate.price!, amountOre: 1, validUntil: new Date(now - 1_000).toISOString() };
+  alternate.expiresAt = new Date(now + 30 * 60_000).toISOString();
+  data.observations.push(alternate);
+  const riceConnection = data.connections.find(c => c.mainProductId === rice.product.id)!;
+  riceConnection.approvedProducts.push({ productId: alternateId, identity: productIdentity(alternate.product) });
+  const { db } = await seed(data);
+  try {
+    const documents = new Map<number, RecipeDocument>([[1, recipe([
+      { ingredient_original: 'rice', unit: 'g', measured_quantity: 100 },
+    ])]]);
+    const response = await quote(db, data, { retailer: 'coop', recipes: [{ recipeId: 1 }] }, documents);
+    assert.equal(response.status, 200);
+    const body = await response.json() as any;
+    assert.equal(body.basket.complete, true);
+    assert.equal(body.basket.lines[0].productId, 'demo-rice-1kg');
+    assert.ok(Date.parse(body.earliestPriceExpiry) > Date.now());
   } finally { db.close(); }
 });
 
@@ -547,8 +575,13 @@ test('cold local lookup fetches the deduplicated tracked-product union once and 
 });
 
 test('tracked product details expose source pack prices and mark expired observations unusable', async () => {
-  const {db,data}=await seed();
+  const realNow=Date.now;
+  Date.now=()=>Date.parse('2026-10-10T12:00:00.000Z');
+  let db:LocalDatabase|undefined;
   try {
+    const seeded=await seed();
+    db=seeded.db;
+    const {data}=seeded;
     const request=new Request('https://worker.test/retailers/coop/products?ids=demo-rice-1kg,missing,%20demo-eggs-6');
     assert.equal((await retailerRoutes(request,env(db))).status,400);
     const valid=new Request('https://worker.test/retailers/coop/products?ids=demo-rice-1kg,missing,demo-rice-1kg');
@@ -562,12 +595,21 @@ test('tracked product details expose source pack prices and mark expired observa
     assert.equal(body.products[0].fresh,true);
     assert.equal(body.products[0].publicPriceUsable,true);
     assert.deepEqual(body.missingProductIds,['missing']);
-    await db.query('UPDATE retail_runs SET checked_at=?,expires_at=?',[new Date(Date.now()-86400000).toISOString(),new Date(Date.now()-1).toISOString()]);
-    const expired=await (await retailerRoutes(valid,env(db))).json() as any;
-    assert.equal(expired.products[0].fresh,false);
-    assert.equal(expired.products[0].publicPriceUsable,false);
+    const checkedAt = new Date(Date.now()-25*60*60_000).toISOString();
+    assert.equal(scanIsCurrent(Date.parse(checkedAt)),true,'the legacy run timestamp remains in the active calendar week');
+    await db.query('UPDATE retail_runs SET checked_at=?,expires_at=?',[checkedAt,new Date(Date.now()-1).toISOString()]);
+    const legacy = await (await retailerRoutes(valid,env(db))).json() as any;
+    assert.equal(legacy.products[0].fresh,true,'checked_at under the weekly policy overrides the old 24-hour run expiry');
+    assert.equal(legacy.products[0].publicPriceUsable,true);
+
+    const stored = JSON.parse(String((await rows(db,'SELECT observation_json FROM retail_products WHERE product_id=?',['demo-rice-1kg']))[0].observation_json));
+    stored.price.validUntil = new Date(Date.now()-1).toISOString();
+    await db.query('UPDATE retail_products SET observation_json=? WHERE product_id=?',[JSON.stringify(stored),'demo-rice-1kg']);
+    const campaignExpired = await (await retailerRoutes(valid,env(db))).json() as any;
+    assert.equal(campaignExpired.products[0].fresh,false,'campaign validUntil continues to constrain the stored observation');
+    assert.equal(campaignExpired.products[0].publicPriceUsable,false);
     assert.equal((await retailerRoutes(new Request('https://worker.test/retailers/ica/products?ids=demo-rice-1kg'),env(db))).status,503);
-  } finally {db.close();}
+  } finally {db?.close();Date.now=realNow;}
 });
 
 test('blocked meat ingredient cannot use a reviewed product connection', async () => {

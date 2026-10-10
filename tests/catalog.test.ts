@@ -8,6 +8,7 @@ import { publish } from '../src/publish.ts';
 import { catalogStorageSchema, seedCatalogStorage } from '../src/catalog-storage.ts';
 import { WillysClient, inVisitWindow, validatePage } from '../src/willys.ts';
 import { cloudflare } from '../scripts/helpers.ts';
+import { calendarWeekEnd } from '../src/price-freshness.ts';
 import worker, { handle, packPrice, expiresAt } from '../worker/index.ts';
 import type { Category, Database, Page, Scan, SourceProduct, Store } from '../src/types.ts';
 
@@ -368,7 +369,10 @@ test('API authentication fails closed, and price requests match exact codes', as
 test('stale prices are omitted from planner responses', async () => {
   const db = database();
   try {
-    await publish(db, scan([raw()], -25 * 3600000));
+    const priorWeekEnd = calendarWeekEnd(Date.now() - 7 * 86_400_000);
+    const observedAt = priorWeekEnd - 1;
+    const staleScan = scan([raw()], observedAt - Date.now());
+    await publish(db, staleScan);
     const response = await handle(request('/prices/query', { storeId: '2110', currency: 'SEK', products: [{ productId: 'id', willysCode: 'TEST_1_ST' }] }), { DB: workerDb(db), CATALOG_API_TOKEN: secret });
     const body = await response.json() as any; assert.deepEqual(body.prices, []); assert.equal(body.unresolved[0].reason, 'stale');
   } finally { db.close(); }

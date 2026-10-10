@@ -1,3 +1,5 @@
+import { calendarWeekEnd, scanIsCurrent, PRICE_FRESHNESS_POLICY_VERSION } from '../src/price-freshness.ts';
+import { referenceObservation } from '../src/retailers/freshness.ts';
 import { DIETARY_POLICY_VERSION, ingredientPolicy } from '../src/dietary-policy.ts';
 import { validateConnections, validateObservation } from '../src/retailers/identity.ts';
 import type { ReviewedConnection } from '../src/retailers/identity.ts';
@@ -106,15 +108,14 @@ async function assess(env: RetailAvailabilityEnv, manifest: RetailManifest, reta
     const scope = parseScope(meta.reference_scope, retailer);
     if (!scope) return { availability: failure(retailer), state: null };
     if (!run || !run.id || !Number.isFinite(Date.parse(run.checked_at)) || !Number.isFinite(Date.parse(run.expires_at))
-      || Date.parse(run.expires_at) <= now || Date.parse(run.checked_at) > now + 60000
-      || now - Date.parse(run.checked_at) >= 86400000) {
+      || !scanIsCurrent(Date.parse(run.checked_at),now)) {
       return { availability: failure(retailer, scope, run?.id ?? null), state: null };
     }
     const connectionsVersion = meta.connections_version;
     if (!connectionsVersion || connectionsVersion.length > 200) {
       return { availability: failure(retailer, scope, run.id, ['connections_version_missing']), state: null };
     }
-    const cacheKey = JSON.stringify([manifest.datasetId, manifest.inventoryHash, run.id, connectionsVersion, meta.policy_version]);
+    const cacheKey = JSON.stringify([manifest.datasetId, manifest.inventoryHash, run.id, connectionsVersion, meta.policy_version, PRICE_FRESHNESS_POLICY_VERSION]);
     const cache = cacheFor(db), cached = cache.get(cacheKey);
     if (cached && cached.expiresAtMs > now) return { availability: cached.availability, state: cached };
     if (cached) cache.delete(cacheKey);
@@ -154,9 +155,9 @@ async function assess(env: RetailAvailabilityEnv, manifest: RetailManifest, reta
         return { availability: failure(retailer, scope, run.id, ['invalid_availability_summary']), state: null };
       }
       const boundaryMs = boundary === null ? Infinity : Date.parse(boundary);
-      const checkedExpiry = Date.parse(run.checked_at) + 86400000;
+      const checkedExpiry = calendarWeekEnd(Date.parse(run.checked_at));
       if (boundaryMs > now) {
-        const expiryMs = Math.min(Date.parse(run.expires_at), checkedExpiry, boundaryMs);
+        const expiryMs = Math.min(checkedExpiry, boundaryMs);
         if (expiryMs <= now) return { availability: failure(retailer, scope, run.id, ['availability_summary_expired']), state: null };
         const summary = value as AvailabilitySummary;
         const availability: RetailAvailability = { current: true, retailer, scope, runId: run.id,
@@ -210,7 +211,7 @@ async function assess(env: RetailAvailabilityEnv, manifest: RetailManifest, reta
         const observation = JSON.parse(row.observation_json) as ProductObservation;
         if (row.product_id !== observation.product.id || !tracked.has(observation.product.id)
           || !checkedIds.has(observation.product.id)) return [];
-        const checked = { ...observation, checkedAt: run.checked_at, expiresAt: run.expires_at };
+        const checked = referenceObservation(observation, run.checked_at);
         validateObservation(checked, retailer, scope);
         return [checked];
       } catch { return []; }
@@ -234,7 +235,7 @@ async function assess(env: RetailAvailabilityEnv, manifest: RetailManifest, reta
       health.set(connection.ingredientId, { status: result.status, productId: result.productId });
       if (connection.status !== 'non_purchased' && result.status !== 'matched') brokenNames.add(connection.name);
     }
-    const expCandidates = [Date.parse(run.expires_at), Date.parse(run.checked_at) + 86400000];
+    const expCandidates = [calendarWeekEnd(Date.parse(run.checked_at))];
     for (const result of health.values()) {
       const observation = result.productId ? observations.find(item => item.product.id === result.productId) : undefined;
       if (!observation?.price) continue;
@@ -341,7 +342,7 @@ async function lookupPublishedNames(db: D1Database, retailer: RetailerId, scope:
       const observation = JSON.parse(row.observation_json) as ProductObservation;
       if (row.product_id !== observation.product.id || !expected.has(observation.product.id)
         || observations.has(observation.product.id)) throw new Error('invalid_stored_observation');
-      const current = { ...observation, checkedAt: run.checked_at, expiresAt: run.expires_at };
+      const current = referenceObservation(observation, run.checked_at);
       validateObservation(current, retailer, scope);
       observations.set(current.product.id, current);
     } catch { /* A bad or missing selected row remains unavailable for this name. */ }

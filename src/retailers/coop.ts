@@ -1,3 +1,4 @@
+import { calendarWeekEnd } from '../price-freshness.ts';
 import {
   RetailerUnsupportedError,
   postalCode as validatePostalCode,
@@ -307,7 +308,7 @@ function parseCoopProductValidated(
       ? 'unavailable'
       : 'available'
     : 'unknown';
-  const sourceExpiry = Math.min(checkedAt.getTime() + 24 * 60 * 60_000,
+  const sourceExpiry = Math.min(calendarWeekEnd(checkedAt.getTime()),
     price?.validUntil ? Date.parse(price.validUntil) : Infinity);
 
   return {
@@ -317,7 +318,7 @@ function parseCoopProductValidated(
     price,
     availability: verifiedForRequestedStore ? availability : 'unknown',
     checkedAt: checked,
-    // Source observations can support daily reference snapshots; the local resolver
+    // Source observations support reference snapshots for their Swedish calendar week; the local resolver
     // applies its own shorter 30-minute cache window.
     expiresAt: new Date(sourceExpiry).toISOString(),
     storeScopeVerified: verifiedForRequestedStore,

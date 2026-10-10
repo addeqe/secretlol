@@ -1,3 +1,4 @@
+import { calendarWeekEnd, scanIsCurrent, PRICE_FRESHNESS_POLICY_VERSION, PRICE_TIME_ZONE } from '../src/price-freshness.ts';
 import type { Entry } from '../src/types.ts';
 import {catalogPageSql} from '../src/catalog-query.ts';
 import { ingredientRoutes } from './ingredients.ts';
@@ -6,7 +7,7 @@ import { retailerRoutes, type RetailEnv } from './retailers.ts';
 import { initializeCoopParserRuntime } from '../src/retailers/coop-parser-runtime.ts';
 // Compile the small pure source parser before requests use the 10 ms CPU budget.
 initializeCoopParserRuntime();
-export type Env = { DB: D1Database; MEAL_DB?: D1Database; CATALOG_API_TOKEN: string; PRICE_MAX_AGE_HOURS?: string;
+export type Env = { DB: D1Database; MEAL_DB?: D1Database; CATALOG_API_TOKEN: string;
   GITHUB_REPOSITORY?: string; GITHUB_DISPATCH_TOKEN?: string; INGREDIENT_REVIEW_TOKEN?: string } & RetailEnv;
 type Snapshot = { id: string; store_id: string; store_name: string; completed_at: string;
   started_at: string; product_count: number; report_json: string;oldest_observation_at?:string };
@@ -20,8 +21,8 @@ export function authorized(request: Request, secret: string) {
   for (let i = 0; i < secret.length; i++) difference |= provided.charCodeAt(i) ^ secret.charCodeAt(i);
   return difference === 0;
 }
-export function expiresAt(entry: Pick<Entry, 'observedAt' | 'offers'>, ageHours = 24): string {
-  let until = Date.parse(entry.observedAt) + ageHours * 3600000;
+export function expiresAt(entry: Pick<Entry, 'observedAt' | 'offers'>): string {
+  let until = calendarWeekEnd(Date.parse(entry.observedAt));
   // An offer may affect the listed price. Expire conservatively at its end.
   for (const offer of entry.offers as Array<{ validUntil?: unknown }>) {
     const expiry = typeof offer?.validUntil === 'number' ? offer.validUntil : NaN;
@@ -71,14 +72,12 @@ export async function handle(request: Request, env: Env): Promise<Response> {
     WHERE s.id=(SELECT value FROM catalog_state WHERE key='active_snapshot') AND s.status='complete'`).first<Snapshot>();
   if (!snapshot) return json({ error: 'catalogue_not_ready', message: 'Run the first catalogue sync.' }, 503);
   if(url.pathname==='/ingredients'||url.pathname.startsWith('/ingredients/'))return ingredientRoutes(request,env,snapshot,requestJson);
-  const ageHours = Number(env.PRICE_MAX_AGE_HOURS ?? 24);
-  if (!Number.isFinite(ageHours) || ageHours <= 0 || ageHours > 24) return json({ error: 'invalid_freshness_configuration' }, 503);
   if (url.pathname === '/status' && request.method === 'GET') {
     const oldest=snapshot.oldest_observation_at??(await env.DB.prepare(`SELECT MIN(observed_at) AS oldest
       FROM catalog_entries_read WHERE snapshot_id=?`).bind(snapshot.id).first<{oldest:string}>())?.oldest;
     return json({ store: { id: snapshot.store_id, name: snapshot.store_name }, products: snapshot.product_count,
       snapshotId: snapshot.id, lastSuccessfulSync: snapshot.completed_at, oldestObservation: oldest,
-      fresh: !!oldest && Date.now() - Date.parse(oldest) < ageHours * 3600000,
+      fresh: !!oldest && scanIsCurrent(Date.parse(oldest)), priceFreshnessPolicy: PRICE_FRESHNESS_POLICY_VERSION, priceTimeZone: PRICE_TIME_ZONE, catalogueExpiresAt: oldest && Number.isFinite(calendarWeekEnd(Date.parse(oldest))) ? new Date(calendarWeekEnd(Date.parse(oldest))).toISOString() : null,
       ...JSON.parse(snapshot.report_json) });
   }
   if (url.pathname === '/catalog' && request.method === 'GET') {
@@ -97,7 +96,7 @@ export async function handle(request: Request, env: Env): Promise<Response> {
     }
     const result = await env.DB.prepare(catalogPageSql()).bind(snapshot.id,after,limit+1,snapshot.id,after,limit+1,limit+1).all<{code:string;data_json:string}>();
     const entries = result.results.slice(0, limit).map(row => JSON.parse(row.data_json) as Entry);
-    const products = entries.map(({ raw, priceHash, ...entry }) => ({ ...entry, expiresAt: expiresAt(entry, ageHours) }));
+    const products = entries.map(({ raw, priceHash, ...entry }) => ({ ...entry, expiresAt: expiresAt(entry) }));
     const last = entries.at(-1);
     return json({ snapshotId: snapshot.id, storeId: snapshot.store_id, products,
       nextCursor: result.results.length > limit && last ? btoa(`${snapshot.id}:${last.code}`).replace(/\+/g, '-').replace(/\//g, '_') : null });
@@ -109,7 +108,7 @@ export async function handle(request: Request, env: Env): Promise<Response> {
       .bind(snapshot.id, productMatch[1]).first<{ data_json: string }>();
     if (!row) return json({ error: 'product_not_found' }, 404);
     const entry = JSON.parse(row.data_json) as Entry;
-    return json({ storeId: snapshot.store_id, ...entry, expiresAt: expiresAt(entry, ageHours) });
+    return json({ storeId: snapshot.store_id, ...entry, expiresAt: expiresAt(entry) });
   }
   const historyMatch = /^\/history\/([^/]+)$/.exec(url.pathname);
   if (historyMatch && request.method === 'GET') {
@@ -136,8 +135,8 @@ export async function handle(request: Request, env: Env): Promise<Response> {
     for (const product of data.products) {
       const entry = entries.get(product.willysCode);
       const price = entry ? packPrice(entry, product) : null;
-      const expiry = entry ? expiresAt(entry, ageHours) : null;
-      if (!entry || price === null || !expiry || Date.parse(expiry) <= Date.now() || Date.parse(entry.observedAt) > Date.now() + 60000) {
+      const expiry = entry ? expiresAt(entry) : null;
+      if (!entry || price === null || !expiry || Date.parse(expiry) <= Date.now() || !scanIsCurrent(Date.parse(entry.observedAt))) {
         unresolved.push({ productId: product.productId, reason: !entry ? 'unknown_code' : price === null ? 'pack_price_unresolved' : 'stale' }); continue;
       }
       prices.push({ productId: product.productId, storeId: snapshot.store_id, price, currency: 'SEK', source: 'snapshot',

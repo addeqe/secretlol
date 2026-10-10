@@ -1,3 +1,4 @@
+import { calendarWeekEnd, scanIsCurrent } from '../src/price-freshness.ts';
 import {publicProfileRevision,parseCandidateProfile,recipePatches,mergeRecipePatch,mergeSummaryPatch,ingredientPatches,rankedRecipeIds,type EnrichmentManifest} from './meal-enrichment.ts';
 import {ingredientPolicy,productPolicy,DIETARY_POLICY_VERSION} from '../src/dietary-policy.ts';
 import {curatedPlanningRules,parsePlanningSlot,planningQualityPolicyVersion} from '../src/meal-planning-quality.ts';
@@ -27,7 +28,7 @@ async function activeRun(env:MealEnv,m:Manifest){
   const run=await env.DB.prepare(`SELECT * FROM ingredient_runs WHERE id=(SELECT value FROM catalog_state WHERE key='active_ingredient_run') AND status='complete'`).first<Run>();
   const current=!!snapshot&&!!run&&snapshot.id===run.catalogue_snapshot_id&&run.inventory_hash===m.inventoryHash&&run.requirements===m.distinctIngredients&&JSON.parse(run.report_json).dietaryPolicy?.version===DIETARY_POLICY_VERSION;
   let freshness:{catalogueObservedAt:string;catalogueExpiresAt:string;catalogueFresh:boolean}|undefined;
-  if(snapshot?.report_json){try{const observedAt=(JSON.parse(snapshot.report_json) as {oldestObservation?:unknown}).oldestObservation;if(typeof observedAt==='string'){const observed=Date.parse(observedAt),expires=observed+86400000;if(Number.isFinite(observed)&&Number.isFinite(expires))freshness={catalogueObservedAt:new Date(observed).toISOString(),catalogueExpiresAt:new Date(expires).toISOString(),catalogueFresh:observed<=Date.now()+60000&&expires>Date.now()};}}catch{/* Older snapshots may not carry source observation metadata. */}}
+  if(snapshot?.report_json){try{const observedAt=(JSON.parse(snapshot.report_json) as {oldestObservation?:unknown}).oldestObservation;if(typeof observedAt==='string'){const observed=Date.parse(observedAt),expires=calendarWeekEnd(observed);if(Number.isFinite(observed)&&Number.isFinite(expires))freshness={catalogueObservedAt:new Date(observed).toISOString(),catalogueExpiresAt:new Date(expires).toISOString(),catalogueFresh:scanIsCurrent(observed)};}}catch{/* Older snapshots may not carry source observation metadata. */}}
   return {snapshot,run,current,...freshness};
 }
 async function quoteRecipeData(env:MealEnv,m:Manifest,ids:number[]){
@@ -80,10 +81,10 @@ async function lookupLive(env:MealEnv,m:Manifest,names:string[]){
     const entry=hydrated?.product?(typeof hydrated.product==='string'?JSON.parse(hydrated.product):hydrated.product) as Entry:null;
     const blocked=ingredientPolicy(row.ingredient_name).blockedReason||(entry?productPolicy(entry,row.ingredient_name):null);
     let expiresAt:string|null=null;
-    if(entry){let expiry=Date.parse(entry.observedAt)+86400000;for(const offer of entry.offers as Array<{validUntil?:unknown}>){if(typeof offer.validUntil==='number'&&offer.validUntil>Date.parse(entry.observedAt))expiry=Math.min(expiry,offer.validUntil);}if(Number.isFinite(expiry))expiresAt=new Date(expiry).toISOString();}
+    if(entry){let expiry=calendarWeekEnd(Date.parse(entry.observedAt));for(const offer of entry.offers as Array<{validUntil?:unknown}>){if(typeof offer.validUntil==='number'&&offer.validUntil>Date.parse(entry.observedAt))expiry=Math.min(expiry,offer.validUntil);}if(Number.isFinite(expiry))expiresAt=new Date(expiry).toISOString();}
     const product:CostProduct|null=entry&&expiresAt?{code:entry.code,name:entry.name,brand:entry.brand,priceOre:entry.priceOre,priceUnit:entry.priceUnit,depositOre:entry.depositOre,available:entry.available,observedAt:entry.observedAt,expiresAt,pack:packInfo({...entry,raw:{...entry.raw,code:entry.code,name:entry.name,displayVolume:hydrated?.packLabel}})}:null;
     const status=blocked?'excluded_by_policy':row.status;
-    const fresh=!!product&&product.available&&Date.parse(product.expiresAt)>Date.now()&&Date.parse(product.observedAt)<=Date.now()+60000;
+    const fresh=!!product&&product.available&&Date.parse(product.expiresAt)>Date.now()&&scanIsCurrent(Date.parse(product.observedAt));
     links.set(row.ingredient_name,{name:row.ingredient_name,status,willysItemId:blocked?null:row.selected_code,product:blocked?null:product,priceFresh:fresh&&!blocked,reason:blocked??connection.reason,foodId:connection.foodId,connectionMethod:connection.method,amountConversionComplete:false});
   }
   return {version,links};

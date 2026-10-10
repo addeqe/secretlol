@@ -1,3 +1,5 @@
+import { calendarWeekEnd, scanIsCurrent, PRICE_FRESHNESS_POLICY_VERSION } from '../src/price-freshness.ts';
+import { referenceObservation } from '../src/retailers/freshness.ts';
 import {publicProfileRevision} from './meal-enrichment.ts';
 import { CoopClient } from '../src/retailers/coop.ts';
 import { IcaClient } from '../src/retailers/ica.ts';
@@ -44,7 +46,7 @@ async function observations(db: D1Database, retailer: RetailerId, scope: StoreSc
     AND product_id IN (SELECT value FROM json_each(?))`).bind(key, JSON.stringify(ids)).all<{observation_json: string}>();
   return result.results.map(r => {
     const o = JSON.parse(r.observation_json) as ProductObservation;
-    return checked.has(o.product.id) ? { ...o, checkedAt: run.checked_at, expiresAt: run.expires_at } : o;
+    return referenceObservation(o, checked.has(o.product.id) ? run.checked_at : o.checkedAt);
   });
 }
 
@@ -206,16 +208,15 @@ function quoteCacheRequestKey(body: unknown, meta: Record<string,string>, retail
   const runIds = scopeKeys.map(key => [key, runs.get(key)?.id ?? null] as const);
   if (runIds.some(([,id]) => id === null)) return null;
   return JSON.stringify([body, retailer, meta.dataset_id, meta.inventory_hash, meta.policy_version,
-    meta.connections_version, requestedScopeKey, runIds, mappings, 'complete-quote-cache-v1']);
+    meta.connections_version, requestedScopeKey, runIds, mappings, 'complete-quote-cache-v1', PRICE_FRESHNESS_POLICY_VERSION]);
 }
 function runCurrentForQuote(run: ActiveRun | null, now: number): boolean {
   if (!run) return false;
   const checked = Date.parse(run.checked_at), expires = Date.parse(run.expires_at);
-  return Number.isFinite(checked) && checked <= now + 60_000 && now - checked < 86_400_000
-    && Number.isFinite(expires) && expires > now;
+  return scanIsCurrent(checked, now) && Number.isFinite(expires);
 }
 function quoteCacheExpiry(now: number, local: boolean, runs: ActiveRun[], observations: ProductObservation[]): number {
-  let expiry = now + (local ? 30 * 60_000 : 86_400_000);
+  let expiry = local ? Math.min(now + 30 * 60_000, calendarWeekEnd(now)) : calendarWeekEnd(now);
   const include = (value: string | null | undefined) => {
     if (value == null || value === '') return true;
     const time = Date.parse(value);
@@ -224,16 +225,15 @@ function quoteCacheExpiry(now: number, local: boolean, runs: ActiveRun[], observ
     return true;
   };
   for (const run of runs) {
-    include(run.expires_at);
     const checked = Date.parse(run.checked_at);
     if (!Number.isFinite(checked)) return now;
-    expiry = Math.min(expiry, checked + 86_400_000);
+    expiry = Math.min(expiry, calendarWeekEnd(checked));
   }
   for (const observation of observations) {
     if (!include(observation.expiresAt)) return now;
     const checked = Date.parse(observation.checkedAt);
     if (!Number.isFinite(checked)) return now;
-    expiry = Math.min(expiry, checked + 86_400_000);
+    expiry = Math.min(expiry, calendarWeekEnd(checked));
     if (!include(observation.price?.validFrom) || !include(observation.price?.validUntil)) return now;
   }
   return expiry;
@@ -266,7 +266,7 @@ export async function retailerRoutes(request: Request, env: RetailEnv): Promise<
       priceSource:'reference-webshop', products:unique.flatMap(id => {
         const o = byId.get(id); if (!o) return [];
         return [{...o, fresh:Date.parse(o.expiresAt) > now && Date.parse(o.checkedAt) <= now + 60000
-          && now - Date.parse(o.checkedAt) < 86400000, publicPriceUsable:observationUsable(o, retailer, scope, now)}];
+          && scanIsCurrent(Date.parse(o.checkedAt), now), publicPriceUsable:observationUsable(o, retailer, scope, now)}];
       }), missingProductIds:unique.filter(id => !byId.has(id))});
   }
   if (url.pathname === '/retailers') {
@@ -280,7 +280,7 @@ export async function retailerRoutes(request: Request, env: RetailEnv): Promise<
       retailers.push({retailer, connected: !!db, configured: meta.retailer === retailer,
         referenceScope: scope ? {storeId: scope[1], channel: scope[2], ...(scope[3] ? {slotId:scope[3]} : {})} : null,
         datasetId:meta.dataset_id ?? null, inventoryHash:meta.inventory_hash ?? null,
-        lastRefresh:run ? JSON.parse(run.report_json) : null, capabilities:client.capabilities,
+        lastRefresh:run ? (()=>{const report=JSON.parse(run.report_json);const end=calendarWeekEnd(Date.parse(report.checkedAt));return {...report,expiresAt:Number.isFinite(end)?new Date(end).toISOString():null,fresh:scanIsCurrent(Date.parse(report.checkedAt)),priceFreshnessPolicy:PRICE_FRESHNESS_POLICY_VERSION};})() : null, capabilities:client.capabilities,
         liveLookupsEnabled:env.RETAILERS_LIVE_ENABLED === 'true'});
     }
     return json({retailers, defaultRetailer:'willys', version:'1'});
@@ -498,11 +498,15 @@ export async function retailMealQuote(env: RetailEnv, manifest: Manifest, body: 
     maxStates:Math.floor(1000/candidates.length),maxWork:Math.floor(20000/candidates.length),budgetOre:body.budgetOre});
   if(body.priceMode!=='local')for(const f of ranked)f.referenceCostOre=f.basket.purchaseCostOre;
   const winner = ranked.find(f=>f.basket.complete && f.basket.withinBudget !== false);
+  // An expired approved alternative does not invalidate a basket that selected
+  // another current product. Bind displayed validity to priced basket lines.
+  const selectedIds = new Set(ranked.flatMap(f=>f.basket.lines.map(line=>line.productId)));
+  const selectedPrices = priced.filter(o=>selectedIds.has(o.product.id));
   const response = json({retailer,storeId:scope.storeId,channel:scope.channel,slotId:scope.slotId ?? null,
     priceMode:body.priceMode ?? 'reference', priceSource:body.priceMode === 'local' ? 'local-webshop' : 'reference-webshop',
     datasetId:manifest.datasetId,profileRevision:publicProfileRevision(manifest.enrichment),inventoryHash:manifest.inventoryHash,policyVersion:DIETARY_POLICY_VERSION,
     currency:'SEK',priceScale:'öre',pricedAt:new Date(now).toISOString(),
-    earliestPriceExpiry:priced.length ? priced.map(o=>o.expiresAt).sort()[0] : null,
+    earliestPriceExpiry:selectedPrices.length ? selectedPrices.map(o=>o.expiresAt).sort()[0] : null,
     finalists:ranked,selectedMenuId:winner?.id ?? null,referenceCostIsEstimate:body.priceMode==='local',
     amountConversions:finalCandidates.map(f=>({id:f.id,ingredients:f.demands.filter(d=>'conversionEvidence' in d).map(d=>({name:d.name,quantity:d.quantity,unit:d.unit,evidence:(d as any).conversionEvidence}))})),
     cheapestVerified:!!winner && ranked.every(f=>f.basket.complete && f.basket.optimizationComplete),

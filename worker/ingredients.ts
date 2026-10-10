@@ -1,3 +1,4 @@
+import { scanIsCurrent } from '../src/price-freshness.ts';
 import {DIETARY_POLICY_VERSION,ingredientPolicy,productPolicy} from '../src/dietary-policy.ts';
 import {candidate} from '../src/ingredient-candidate.ts';
 
@@ -63,7 +64,7 @@ export async function ingredientRoutes(request:Request,env:Env,snapshot:{id:stri
     const oldest=snapshot.oldest_observation_at??(await env.DB.prepare('SELECT MIN(observed_at) AS oldest FROM catalog_entries_read WHERE snapshot_id=?').bind(snapshot.id).first<{oldest:string}>())?.oldest;
     return json({...JSON.parse(run.report_json),lastSuccessfulConnectionRefresh:run.created_at,
       activeCatalogueSnapshotId:snapshot.id,connectionsCurrent:run.catalogue_snapshot_id===snapshot.id,
-      catalogueFresh:!!oldest&&Date.now()-Date.parse(oldest)<86400000,
+      catalogueFresh:!!oldest&&scanIsCurrent(Date.parse(oldest)),
       lastRunTrackedAllIngredients:true});
   }
   if(route==='/ingredients'&&request.method==='GET'){

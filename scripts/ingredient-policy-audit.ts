@@ -1,3 +1,4 @@
+import { scanIsCurrent } from '../src/price-freshness.ts';
 import {readFileSync,writeFileSync} from 'node:fs';
 import {buildLinks,summarizeLinks} from '../src/ingredient-matching.ts';
 import {DIETARY_POLICY} from '../src/dietary-policy.ts';
@@ -9,7 +10,7 @@ const inventory=JSON.parse(readFileSync(inventoryPath,'utf8'));
 const catalogue=JSON.parse(readFileSync(cataloguePath,'utf8'));
 if(!catalogue.snapshotId||!Array.isArray(catalogue.products)||!catalogue.products.length||
   catalogue.status?.products!=null&&catalogue.products.length!==catalogue.status.products)throw new Error('Invalid catalogue export');
-if(catalogue.products.some((p:any)=>Date.now()-Date.parse(p.observedAt)>=86400000||!Number.isFinite(Date.parse(p.observedAt))))throw new Error('Fresh catalogue required for recipe eligibility');
+if(catalogue.products.some((p:any)=>!scanIsCurrent(Date.parse(p.observedAt))))throw new Error('Fresh catalogue required for recipe eligibility');
 const links=buildLinks(inventory.requirements,catalogue.products);
 const exclusions=links.filter(l=>l.status==='excluded'||l.dietaryPolicy.meat&&l.status!=='matched')
   .map(l=>({name:l.name,occurrences:l.occurrences,reason:l.dietaryPolicy.blockedReason??'no_permitted_meat_match',

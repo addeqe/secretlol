@@ -50,7 +50,7 @@ Coops fulla startscan, Luna-granskning, separata D1-databas, produktimport och W
 
 Ett större molnprov gav komplett referensoffert för recept 25493 med elva ingredienser, 22 288 öre i inköp. En lokal offert för Daglivs gav 23 163 öre för samma recept och 28 162 öre för alternativet 71854; båda var kompletta och optimeringen avslutades. Beloppen är observationer från den 9 oktober, inte fasta priser.
 
-Coops källobservationer gäller i högst 24 timmar eller till valt erbjudandes slut. Den lokala kundcachen begränsar samma observation till 30 minuter. Regressioner täcker referenspris efter sex timmar, ett erbjudande som slutar efter 20 minuter och lokal cache som löper ut efter 30 minuter.
+Coops källobservationer gäller under skanningens kalendervecka, måndag–söndag i svensk tid, eller till valt erbjudandes slut om det kommer tidigare. Den lokala kundcachen begränsar samma observation till 30 minuter. Regressioner täcker referenspris efter sex timmar, ett erbjudande som slutar efter 20 minuter och lokal cache som löper ut efter 30 minuter.
 
 Ett separat, avgränsat ICA-browserprov i `scripts/probe-ica-browser.mjs` har körts efter användarens uttryckliga godkännande. Vanlig Chromium öppnade butikssidan och följde dess kakdialog/kategorimeny. Den sista produktkontrollen upptäckte CAPTCHA och stoppades utan lösning eller ytterligare liveförsök. Ingen komplett produkt-/prisartefakt skapades. Automatisk ICA-prishämtning förblir avstängd. Syntaxkontrollen passerar och standardkörningen stoppar fortfarande före browserimport och nätåtkomst.
 

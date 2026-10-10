@@ -21,5 +21,5 @@ test('planning slot parser accepts only the documented API values and profile re
   for(const slot of planningSlots)assert.equal(parsePlanningSlot(slot),slot);
   assert.equal(parsePlanningSlot(null),null);
   assert.equal(parsePlanningSlot('main'),null);
-  assert.match(publicProfileRevision({revision:'fixture'} )!,/curated-slot-quality-v1$/);
+  assert.match(publicProfileRevision({revision:'fixture'} )!,/curated-slot-quality-v1\+stockholm-calendar-week-v1$/);
 });

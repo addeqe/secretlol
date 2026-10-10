@@ -1,3 +1,4 @@
+import { calendarWeekEnd, scanIsCurrent } from '../price-freshness.ts';
 import { DIETARY_POLICY_VERSION, ingredientPolicy, productPolicy } from '../dietary-policy.ts';
 import type { ProductObservation, RetailProduct, RetailerId, StoreScope } from './types.ts';
 import { productId, scopeKey, validateScope } from './types.ts';
@@ -99,8 +100,8 @@ export function observationUsable(observation: ProductObservation, retailer: Ret
   const price = observation.price;
   return observation.retailer === retailer && scopeKey(retailer, observation.scope) === scopeKey(retailer, scope)
     && observation.storeScopeVerified && observation.availability === 'available'
-    && Number.isFinite(checked) && checked <= now + 60000 && Number.isFinite(expires) && expires > now
-    && now - checked < 86400000 && !!price && Number.isSafeInteger(price.amountOre) && price.amountOre >= 0
+    && Number.isFinite(checked) && checked <= now + 60000 && Number.isFinite(expires) && expires > now && calendarWeekEnd(checked) > now
+    && scanIsCurrent(checked, now) && !!price && Number.isSafeInteger(price.amountOre) && price.amountOre >= 0
     && !price.memberOnly && (price.minimumQuantity === null || price.minimumQuantity <= 1)
     && (!price.validFrom || Date.parse(price.validFrom) <= now)
     && (!price.validUntil || Date.parse(price.validUntil) > now);
@@ -113,6 +114,8 @@ export function approvedObservations(connection: ReviewedConnection, observation
   return observations.filter(o => approved.has(o.product.id) && observationUsable(o, retailer, scope, now)
     && approved.get(o.product.id) === productIdentity(o.product) && !reviewedProductPolicy(o.product, connection.name));
 }
+// Legacy checkpoint rows may still carry their original 24-hour expiry. Reads
+// project reference rows to the weekly policy; live usability always checks the week.
 export function validateObservation(o: ProductObservation, retailer: RetailerId, scope: StoreScope): void {
   validateScope(o.scope);
   if (o.retailer !== retailer || scopeKey(retailer, o.scope) !== scopeKey(retailer, scope)
@@ -121,7 +124,7 @@ export function validateObservation(o: ProductObservation, retailer: RetailerId,
     || !['available', 'unavailable', 'unknown'].includes(o.availability)
     || !Number.isFinite(Date.parse(o.checkedAt)) || !Number.isFinite(Date.parse(o.expiresAt))
     || Date.parse(o.expiresAt) <= Date.parse(o.checkedAt)
-    || Date.parse(o.expiresAt) - Date.parse(o.checkedAt) > 86400000) throw new Error('invalid_product_observation');
+    || Date.parse(o.expiresAt) > Math.max(calendarWeekEnd(Date.parse(o.checkedAt)), Date.parse(o.checkedAt) + 86400000)) throw new Error('invalid_product_observation');
   if (o.identityEvidence !== undefined && (o.identityEvidence.status !== 'prior'
     || !Number.isFinite(Date.parse(o.identityEvidence.lastVerifiedAt))
     || Date.parse(o.identityEvidence.lastVerifiedAt) > Date.parse(o.checkedAt) + 60000

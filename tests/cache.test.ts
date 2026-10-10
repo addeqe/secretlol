@@ -2,9 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {calculateMealAvailability,getMealAvailability,getMealImmutable,mealAvailabilityCacheKey,mealImmutableCacheKey,resetMealAvailabilityCache,resetMealImmutableCache,setMealAvailability,setMealImmutable} from '../worker/meal-cache.ts';
 import {mealSearchPhrase} from '../src/meal-search.ts';
+import {calendarWeekEnd} from '../src/price-freshness.ts';
 
 test('availability calculation preserves strict status and freshness predicates',()=>{
-  const now=1_800_000_000_000,observed=new Date(now-10_000).toISOString();
+  const now=Date.parse('2027-01-15T12:00:00.000Z'),observed=new Date(now-10_000).toISOString();
   const row=(ingredient_name:string,status:string,code:string|null,at:string|null,data:unknown)=>({ingredient_name,status,code,observed_at:at,data_json:data===null?null:JSON.stringify(data)});
   const result=calculateMealAvailability([
     row('fresh','matched','A',observed,{available:true,offers:[]}),
@@ -12,21 +13,23 @@ test('availability calculation preserves strict status and freshness predicates'
     row('review','needs_review',null,null,null),
     row('missing','matched','M',null,null),
     row('unavailable','matched','U',observed,{available:false}),
-    row('stale','matched','S',new Date(now-86_400_001).toISOString(),{available:true}),
+    row('stale','matched','S',new Date(calendarWeekEnd(now)-7*86_400_000-1).toISOString(),{available:true}),
     row('future','matched','F',new Date(now+60_001).toISOString(),{available:true}),
   ],now);
   assert.deepEqual(new Set(result.broken),new Set(['review','missing','unavailable','stale','future']));
-  assert.equal(result.expiresAt,now+1);
+  assert.equal(result.expiresAt,now+1,'a just-outside future observation becomes eligible after crossing the 60-second tolerance');
 });
 
-test('availability cache expires exactly at offer and freshness boundaries',()=>{
-  const now=1_800_000_000_000,observed=new Date(now-10_000).toISOString(),expiry=now+500;
+test('availability cache expires exactly at offer and calendar-week boundaries',()=>{
+  const now=Date.parse('2027-01-15T12:00:00.000Z'),observed=new Date(now-25*60*60_000).toISOString(),expiry=now+500;
   const offer=calculateMealAvailability([{ingredient_name:'eggs',status:'matched',code:'A',observed_at:observed,data_json:JSON.stringify({available:true,offers:[{validUntil:expiry}]})}],now);
   assert.deepEqual(offer.broken,[]);assert.equal(offer.expiresAt,expiry);
   assert.deepEqual(calculateMealAvailability([{ingredient_name:'eggs',status:'matched',code:'A',observed_at:observed,data_json:JSON.stringify({available:true,offers:[{validUntil:expiry}]})}],expiry).broken,['eggs']);
-  const freshness=calculateMealAvailability([{ingredient_name:'eggs',status:'matched',code:'A',observed_at:new Date(now-86_400_000+10).toISOString(),data_json:'{"available":true}'}],now);
-  assert.equal(freshness.expiresAt,now+10);
-  assert.deepEqual(calculateMealAvailability([{ingredient_name:'eggs',status:'matched',code:'A',observed_at:new Date(now-86_400_000+10).toISOString(),data_json:'{"available":true}'}],now+10).broken,['eggs']);
+  assert.ok(now-Date.parse(observed)>24*60*60_000);
+  const freshness=calculateMealAvailability([{ingredient_name:'eggs',status:'matched',code:'A',observed_at:observed,data_json:'{"available":true}'}],now);
+  assert.deepEqual(freshness.broken,[]);
+  assert.equal(freshness.expiresAt,calendarWeekEnd(now));
+  assert.deepEqual(calculateMealAvailability([{ingredient_name:'eggs',status:'matched',code:'A',observed_at:observed,data_json:'{"available":true}'}],calendarWeekEnd(now)).broken,['eggs']);
 });
 
 test('cache rechecks Date.now, separates dataset/store/snapshot/run/policy, and stays bounded',()=>{

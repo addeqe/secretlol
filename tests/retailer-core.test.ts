@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { LocalDatabase, rows } from '../src/database.ts';
 import { DIETARY_POLICY_VERSION } from '../src/dietary-policy.ts';
+import { calendarWeekEnd } from '../src/price-freshness.ts';
 import { collectReference } from '../src/retailers/collection.ts';
 import { approvedObservations, cachedIngredientPolicy, productIdentity, reviewedProductPolicy } from '../src/retailers/identity.ts';
 import type { ReviewedConnection } from '../src/retailers/identity.ts';
@@ -181,7 +182,7 @@ test('approved identity changes, stale prices, member prices, and minimum-quanti
   const stale = cloneObservation(valid, { expiresAt: new Date(at - 1).toISOString() });
   const member = cloneObservation(valid, { price: { ...valid.price!, memberOnly: true } });
   const minimum = cloneObservation(valid, { price: { ...valid.price!, minimumQuantity: 2 } });
-  const old = cloneObservation(valid, { checkedAt: new Date(at - 25 * 60 * 60_000).toISOString() });
+  const old = cloneObservation(valid, { checkedAt: new Date(calendarWeekEnd(at - 7 * 86_400_000) - 1).toISOString() });
   assert.deepEqual(approvedObservations(connection, [valid, stale, member, minimum, old], data.retailer, data.scope, at).map(o => o.product.id), [valid.product.id]);
 });
 

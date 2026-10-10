@@ -1,3 +1,4 @@
+import { scanIsCurrent } from './price-freshness.ts';
 import {randomUUID,createHash} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {rows,D1DatabaseClient} from './database.ts';
@@ -46,7 +47,7 @@ export async function refreshIngredientLinks(database:Database, inventory=loadRe
     if(products.length!==Number(snapshot.product_count)||!products.length||new Set(products.map(p=>p.code)).size!==products.length)throw new Error('Supplied catalogue products are incomplete or duplicated; previous connections retained');
     const observation=String((await rows(database,'SELECT oldest_observation_at FROM catalog_snapshot_storage WHERE snapshot_id=?',[String(snapshot.id)]))[0]?.oldest_observation_at??'');
     if(observation)for(const product of products)product.observedAt=observation;
-    if(products.some(p=>!Number.isFinite(Date.parse(p.observedAt)) || Date.now()-Date.parse(p.observedAt)>=86400000)){
+    if(products.some(p=>!scanIsCurrent(Date.parse(p.observedAt)))){
       throw new Error('Catalogue contains stale observations; refresh the catalogue first. Previous connections retained.');
     }
     const reviewRows=await rows(database,'SELECT ingredient_name,decision_json FROM ingredient_reviews');

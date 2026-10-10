@@ -11,7 +11,7 @@ All data endpoints require `Authorization: Bearer <CATALOG_API_TOKEN>`. Use your
 | `GET /history/101233933_ST` | Up to 100 most recent retained observed price/offer changes |
 | `POST /prices/query` | Fresh mapped pack prices compatible with Matbord |
 
-Catalogue pagination is pinned to its snapshot. The previous snapshot is retained until the next cleanup. An expired cursor returns `409 snapshot_expired`; restart without the cursor. Unknown products return 404. An uninitialized catalogue returns `503 catalogue_not_ready`; quota/network/database failures return 503. A stale catalogue remains readable for inspection but stale prices do not enter the planner endpoint.
+Catalogue pagination is pinned to its snapshot. The previous snapshot is retained until the next cleanup. An expired cursor returns `409 snapshot_expired`; restart without the cursor. Unknown products return 404. An uninitialized catalogue returns `503 catalogue_not_ready`; quota/network/database failures return 503. A stale catalogue remains readable for inspection but stale prices do not enter the planner endpoint. A scan is current throughout its Monday–Sunday calendar week in `Europe/Stockholm`, ending at the next Monday 00:00 local time. This is not a rolling seven-day window. Product `expiresAt` is that boundary or an earlier offer end; original observation timestamps remain unchanged. Daily collection continues.
 
 ## Product prices
 

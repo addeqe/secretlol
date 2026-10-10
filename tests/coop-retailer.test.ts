@@ -232,7 +232,7 @@ test('product lookup deduplicates EANs and sends them in one first-party by-id r
   assert.equal(calls[0].searchParams.get('api-version'), 'v1');
   assert.equal(calls[0].searchParams.get('quickSearch'), 'false');
   assert.equal(client.capabilities.batchLookup, true);
-  assert.equal(result[0].expiresAt, '2026-10-09T10:00:00.000Z');
+  assert.equal(result[0].expiresAt, '2026-10-11T22:00:00.000Z');
   assert.equal(observationUsable(result[0], 'coop', scope, Date.parse('2026-10-08T16:00:00Z')), true);
 });
 
@@ -261,7 +261,7 @@ test('Coop offer expiry bounds source validity while local cache remains limited
     async get() { return null; }, async set(_key, value) { ordinaryCached = value; },
   });
   const ordinary = await ordinaryClient.products(scope, [product.id]);
-  assert.equal(ordinary[0].expiresAt, '2026-10-09T10:00:00.000Z');
+  assert.equal(ordinary[0].expiresAt, '2026-10-11T22:00:00.000Z');
   await ordinaryResolver.resolve(scope, [{ ingredientId: 'ingredient-1', approvedProducts: [{ productId: product.id }] } as any],
     Date.parse('2026-10-08T10:00:00Z'));
   assert.equal(ordinaryCached.expiresAt, '2026-10-08T10:30:00.000Z');

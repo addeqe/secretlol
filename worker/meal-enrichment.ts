@@ -1,3 +1,4 @@
+import { PRICE_FRESHNESS_POLICY_VERSION } from '../src/price-freshness.ts';
 import {getMealImmutable,setMealImmutable} from './meal-cache.ts';
 import {amountConversionVersion} from '../src/meal-conversions.ts';
 import {isPlanningRecipeEligible,planningQualityPolicyVersion,type PlanningSlot} from '../src/meal-planning-quality.ts';
@@ -8,7 +9,7 @@ export type PlanningVector=[number,number|null,number|null,number|null,number|nu
 export type CandidateProfile={version:1;calories:number;targets:Record<string,{min?:number;max?:number}>;trackedNutrients:string[]};
 // Storage revisions identify immutable chunks; the public revision also pins
 // amount estimates so a conversion correction invalidates client/quote caches.
-export function publicProfileRevision(m:{revision:string}|undefined){return m?`${m.revision}+${amountConversionVersion}+${planningQualityPolicyVersion}`:null;}
+export function publicProfileRevision(m:{revision:string}|undefined){return m?`${m.revision}+${amountConversionVersion}+${planningQualityPolicyVersion}+${PRICE_FRESHNESS_POLICY_VERSION}`:null;}
 const nutrientColumns:Record<string,number>={calories:2,fat:3,saturatedFat:4,cholesterol:5,sodium:6,carbohydrates:7,fiber:8,sugar:9,protein:10};
 
 export function parseCandidateProfile(raw:string|null):CandidateProfile|null{

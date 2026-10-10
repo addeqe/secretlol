@@ -1,3 +1,4 @@
+import { calendarWeekEnd, scanIsCurrent } from './price-freshness.ts';
 import type { Entry } from './types.ts';
 import { productPolicy } from './dietary-policy.ts';
 import { packInfo } from './product-pack.ts';
@@ -9,7 +10,7 @@ export type Candidate = { code: string; name: string; brand: string | null; avai
   eligible: boolean; exclusion: string | null };
 
 export function candidateExpiry(entry: Pick<Entry,'observedAt'|'offers'>) {
-  let until=Date.parse(entry.observedAt)+86400000;
+  let until=calendarWeekEnd(Date.parse(entry.observedAt));
   for(const offer of entry.offers as Array<{validUntil?:number}>){
     if(typeof offer.validUntil==='number'&&offer.validUntil>Date.parse(entry.observedAt))until=Math.min(until,offer.validUntil);
   }
@@ -32,7 +33,7 @@ export function candidate(entry: Entry, basis: FoodRule['basis'], now: number): 
   let exclusion:string|null=productPolicy(entry);
   if(!exclusion&&!entry.available)exclusion='unavailable';
   else if(!exclusion&&(entry.priceOre===null||entry.depositOre===null||unitPrice===null))exclusion='price_or_comparison_basis_unknown';
-  else if(!exclusion&&(Date.parse(candidateExpiry(entry))<=now||Date.parse(entry.observedAt)>now+60000))exclusion='stale_price';
+  else if(!exclusion&&(Date.parse(candidateExpiry(entry))<=now||!scanIsCurrent(Date.parse(entry.observedAt),now)))exclusion='stale_price';
   else if(!exclusion&&(entry.offers as Array<Record<string,unknown>>).some(o=>o.applied===true&&
     (Number(o.qualifyingCount)>1||o.campaignType&&o.campaignType!=='GENERAL')))exclusion='conditional_price';
   return {code:entry.code,name:entry.name,brand:entry.brand,available:entry.available,comparisonPriceOre:unitPrice,

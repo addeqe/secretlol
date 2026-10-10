@@ -41,7 +41,7 @@ Remote resource creation, token scopes, remote D1 writes, the hosted API and the
 
 The connection wizard applies the schema, deploys the Worker, pushes the workflow and starts a database-only Actions check. After connection, inspect that check in GitHub Actions, run the first collection during the crawler window, run `npm run doctor`, and verify the cron in Cloudflare's Trigger Events settings.
 
-The 24-hour refresh target is best effort on these free services. Quota errors, expired credentials, delayed runners or changed retailer endpoints can make the catalogue stale; the API reports that state and excludes expired prices.
+The 24-hour refresh target is best effort on these free services. Quota errors, expired credentials, delayed runners or changed retailer endpoints can prevent updates. Scans remain usable for their Swedish calendar week; a previous-week scan is stale, and earlier campaign expiry is still enforced. The API reports freshness and excludes expired prices.
 
 ## Setup resume fix — 2 October 2026
 

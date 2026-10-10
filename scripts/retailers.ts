@@ -1,3 +1,5 @@
+import { calendarWeekEnd, scanIsCurrent } from '../src/price-freshness.ts';
+import { referenceObservation } from '../src/retailers/freshness.ts';
 import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -62,7 +64,7 @@ async function main(){
     const data=read(args.fixture??'tests/fixtures/retailers/demo-coop.json') as RetailDataset & {sourceMarker?:string};
     if(!data.sourceMarker?.includes('SYNTHETIC'))throw new Error('Demo requires a marked synthetic fixture');
     // Re-date only explicitly synthetic data, never observations from a real scan.
-    const now=Date.now();for(const o of data.observations){o.checkedAt=new Date(now).toISOString();o.expiresAt=new Date(now+86400000).toISOString();}
+    const now=Date.now();for(const o of data.observations){o.checkedAt=new Date(now).toISOString();o.expiresAt=new Date(calendarWeekEnd(now)).toISOString();}
     const db=new LocalDatabase(args.local?resolve(args.local):':memory:');
     try{db.execute(retailSchema());await configureRetailDataset(db,data);
       const ids=data.connections.flatMap(c=>c.approvedProducts.map(p=>p.productId));
@@ -125,12 +127,11 @@ async function main(){
       Date.now(),categoryMap,loadAssessments().records,data.nominations??null);
     const publicationObservations=args['allow-live']?await collectTracked(client(id),data.scope,trackedIds,25,
       data.observations.filter(o=>trackedIds.includes(o.product.id)))
-      :data.observations.filter(o=>trackedIds.includes(o.product.id));
+      :data.observations.filter(o=>trackedIds.includes(o.product.id)).map(o=>referenceObservation(o));
     const observationsById=new Map(publicationObservations.map(o=>[o.product.id,o]));
     if(!trackedIds.length||trackedIds.some(id=>!observationsById.has(id)))throw new Error('Incomplete approved product observations');
     const publishNow=Date.now();
-    if(trackedIds.some(id=>{const o=observationsById.get(id)!;return Date.parse(o.checkedAt)>publishNow+60000
-      ||publishNow-Date.parse(o.checkedAt)>=86400000||Date.parse(o.expiresAt)<=publishNow;}))throw new Error('Source prices expired; revalidate approved products with --allow-live before publication');
+    if(trackedIds.some(id=>{const o=observationsById.get(id)!;return !scanIsCurrent(Date.parse(o.checkedAt),publishNow)||Date.parse(o.expiresAt)<=publishNow;}))throw new Error('Source prices expired; revalidate approved products with --allow-live before publication');
     const db=database(id);
     try{
       if(args.remote){const authoritative=await loadCloudRequirements(cloud('MEAL_DATABASE_ID',true));if(authoritative.datasetId!==data.datasetId||authoritative.hash!==data.inventoryHash)throw new Error('Recipe inventory changed; review refresh required');}
