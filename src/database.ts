@@ -12,17 +12,31 @@ export class D1DatabaseClient implements Database {
   private url: string;
   private token: string;
   private fetcher: typeof fetch;
-  constructor(options: { accountId?: string; databaseId?: string; token?: string; fetcher?: typeof fetch } = {}) {
+  private readOnly: boolean;
+  constructor(options: { accountId?: string; databaseId?: string; token?: string; fetcher?: typeof fetch; readOnly?: boolean } = {}) {
     const account = options.accountId ?? required('CLOUDFLARE_ACCOUNT_ID');
     const database = options.databaseId ?? required('CLOUDFLARE_DATABASE_ID');
     if (!/^[a-f0-9]{32}$/i.test(account) || !/^[a-f0-9-]{36}$/i.test(database)) throw new Error('Invalid Cloudflare account/database ID');
     this.url = `https://api.cloudflare.com/client/v4/accounts/${account}/d1/database/${database}/query`;
     this.token = options.token ?? required('CLOUDFLARE_API_TOKEN'); this.fetcher = options.fetcher ?? fetch;
+    this.readOnly = options.readOnly ?? false;
   }
   query(sql: string, params: Statement['params'] = []) { return this.send({ sql, params }); }
   batch(batch: Statement[]) { return this.send({ batch }); }
   async send(body: unknown): Promise<QueryResult[]> {
-    if (this.rowsWritten >= integer('MAX_D1_ROWS_WRITTEN', 80000) || this.sizeBytes >= integer('MAX_D1_SIZE_MB', 400) * 1024 * 1024) {
+    if (this.readOnly) {
+      if (!body || typeof body !== 'object' || Array.isArray(body))
+        throw new Error('Read-only D1 client accepts only a single SELECT query.');
+      const request = body as { sql?: unknown; batch?: unknown };
+      const keys = Object.keys(body);
+      const sql = typeof request.sql === 'string' ? request.sql.trim() : '';
+      if (request.batch !== undefined || keys.some(key => key !== 'sql' && key !== 'params')
+        || !/^SELECT\b/i.test(sql) || /;|--|\/\*|\*\//.test(sql)) {
+        throw new Error('Read-only D1 client accepts only a single SELECT query without comments or semicolons.');
+      }
+    }
+    if (!this.readOnly && (this.rowsWritten >= integer('MAX_D1_ROWS_WRITTEN', 80000)
+      || this.sizeBytes >= integer('MAX_D1_SIZE_MB', 400) * 1024 * 1024)) {
       throw new Error('D1 run/storage budget reached. Stay on Free; investigate usage before retrying.');
     }
     for (let attempt = 0; attempt < 3; attempt++) {

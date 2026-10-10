@@ -26,7 +26,7 @@ try{
     publishedProducts={products:scan.entries,catalogueSnapshotId:publication.snapshotId,catalogueContentHash:publication.contentHash};
   }
   await database.query(readFileSync(new URL('../migrations/0002_ingredients.sql',import.meta.url),'utf8'));
-  const inventoryDatabase=local?undefined:new D1DatabaseClient({databaseId:required('MEAL_DATABASE_ID')});
+  const inventoryDatabase=local?undefined:new D1DatabaseClient({databaseId:required('MEAL_DATABASE_ID'),readOnly:true});
   const inventory=inventoryDatabase?await loadCloudRequirements(inventoryDatabase):undefined;
   const report=await refreshIngredientLinks(database,inventory,publishedProducts);
   if(database instanceof D1DatabaseClient){Object.assign(report,{rowsWritten:database.rowsWritten,ingredientRowsWritten:database.rowsWritten-catalogueRowsWritten,

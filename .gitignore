@@ -11,3 +11,6 @@ data/
 *.sqlite*
 *.zip
 coverage/
+
+__pycache__/
+*.pyc

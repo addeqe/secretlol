@@ -53,7 +53,7 @@ Exempel:
 /meal/recipes?diet=vegetarian&excludeAllergen=milk,peanuts&cuisine=mexican&mealType=breakfast&limit=20
 ```
 
-Tillåtna parametrar är `q`, `diet`, `excludeAllergen`, `cuisine`, `region`, `mealType`, `taste`, `nutrition`, `availableOnly`, `limit` och `cursor`. Använd filter-`key` från `/meal/filters`. `q` söker i recepttiteln. Dieter, uteslutna allergener och näringsfilter kombineras med OCH. Flera cuisines/regioner/rätttyper/smaker kombineras med ELLER inom respektive kategori, och OCH mellan kategorierna. Till exempel betyder `cuisine=mexican,lebanese` mexikansk eller libanesisk.
+Tillåtna parametrar är `q`, `diet`, `excludeAllergen`, `cuisine`, `region`, `mealType`, `taste`, `nutrition`, `availableOnly`, `candidateProfile`, `limit` och `cursor`. Använd filter-`key` från `/meal/filters`. `q` söker i recepttiteln. Dieter, uteslutna allergener och näringsfilter kombineras med OCH. Flera cuisines/regioner/rätttyper/smaker kombineras med ELLER inom respektive kategori, och OCH mellan kategorierna. Till exempel betyder `cuisine=mexican,lebanese` mexikansk eller libanesisk.
 
 Allergi- och kostfilter har `yes`, `no` eller `unknown`. Ett allergen måste ha `no` för att ett recept ska passera `excludeAllergen`. En diet måste ha `yes`. Okända bedömningar släpps inte igenom strikta filter. Namnbaserade filter verifierar inte produktetiketter eller spår av allergener. Näringsdata kommer från källans uppgifter per portion och delas inte en andra gång med portionsantalet. LCHF/lågkolhydratfilter är angivna apptrösklar; inget filter intygar medicinsk lämplighet för diabetes.
 
@@ -184,3 +184,7 @@ Den dagliga Coop-uppdateringen är aktiverad för 04:50 UTC. [Verifierad körnin
 Referensobservationer gäller högst 24 timmar, kortare om det valda erbjudandet slutar tidigare. Lokal priscache gäller högst 30 minuter och förlänger aldrig källans giltighet. Vanliga kundofferter skriver inte i D1 och behöver varken lokala filer eller en betald AI-tjänst.
 
 API:t använder nu en liten gateway och ett separat beräkningslager med Durable Objects på Cloudflare Free. Appens URL, token, anrop och svar är desamma. Gatewayen omfattas av 10 ms CPU och beräkningslagret har 30 sekunders standardgräns per anrop. Tre finalister med 32 recept vardera har verifierats i molnet. Dagliga anrops-, duration- och D1-kvoter gäller fortfarande. DO-CPU-telemetrin har kontrollerats efter fördröjd inläsning. Kontrollera HTTP-status och innehållstyp innan svaret läses som JSON, eftersom plattformsfel kan vara HTML. Se [verifieringen](retailer-verification.md) och [Cloudflares DO-gränser](https://developers.cloudflare.com/durable-objects/platform/limits/).
+
+## Förbättrat recepturval och portionsberäkning
+
+Se [receptprofiler och planeringskontrakt](recipe-planning-profiles.md) för näringsrankning, profilversioner och verifierade referensomräkningar. `datasetId` identifierar samma grundarkiv; `profileRevision` identifierar aktuella klassningar och portionsuppgifter. Appen ska kontrollera båda under urval och slutlig prisberäkning.

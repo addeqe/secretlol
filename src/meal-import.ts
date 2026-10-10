@@ -106,4 +106,4 @@ export async function uploadPart(database:Database,m:MealManifest,part:MealManif
   ]);
   return {part:part.day,uploadedRecipes:expected,totalRecipes:m.recipes,complete:part.day===5,...(database instanceof D1DatabaseClient?{rowsWritten:database.rowsWritten,sizeBytes:database.sizeBytes}:{})};
 }
-export function mealSchema(){return ['0001_mealplanner.sql','0002_meal_search.sql','0003_meal_quotes.sql'].map(name=>readFileSync(new URL(`../meal-migrations/${name}`,import.meta.url),'utf8')).join('\n');}
+export function mealSchema(){return ['0001_mealplanner.sql','0002_meal_search.sql','0003_meal_quotes.sql','0004_meal_enrichment.sql'].map(name=>readFileSync(new URL(`../meal-migrations/${name}`,import.meta.url),'utf8')).join('\n');}

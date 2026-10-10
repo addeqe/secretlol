@@ -29,6 +29,7 @@
     "meal:upload": "node scripts/upload-meal-data.ts",
     "meal:search": "node scripts/maintain-meal-search.ts",
     "meal:quotes": "node scripts/maintain-meal-quotes.ts",
+    "meal:enrich": "node scripts/upload-meal-enrichment.ts",
     "retailers": "node scripts/retailers.ts",
     "retailers:demo": "node scripts/retailers.ts demo",
     "retailers:init": "node scripts/init-retailers.ts"

@@ -6,7 +6,7 @@ import { LocalProductResolver, MemoryObservationCache, type ObservationCache } f
 import { rankMenuFinalists } from '../src/retailers/basket.ts';
 import { postalCode, productId, scopeKey, validateScope } from '../src/retailers/types.ts';
 import type { IngredientDemand, MenuFinalist, ProductObservation, RetailClient, RetailerId, StoreScope, QuantityUnit } from '../src/retailers/types.ts';
-import { canonicalAmount } from '../src/meal-cost.ts';
+import { canonicalAmount, sourcedAmount } from '../src/meal-cost.ts';
 import type { IngredientAmount, AmountOverride } from '../src/meal-cost.ts';
 import { DIETARY_POLICY_VERSION } from '../src/dietary-policy.ts';
 
@@ -14,7 +14,7 @@ export type RetailEnv = { COOP_DB?: D1Database; ICA_DB?: D1Database;
   RETAILERS_LIVE_ENABLED?: string; COOP_PUBLIC_SUBSCRIPTION_KEY?: string; COMPUTE_QUOTE_CACHE?: QuoteResponseCache };
 export type RecipeDocument = { servings: number | null; recipe_yield: string | null; ingredients: IngredientAmount[] };
 export type RecipeLoader = (ids: number[]) => Promise<Map<number, RecipeDocument>>;
-type Manifest = { datasetId: string; inventoryHash: string };
+type Manifest = { datasetId: string; inventoryHash: string; enrichment?:{revision:string} };
 const json = (value: unknown, status = 200) => Response.json(value, { status,
   headers: { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' } });
 const fail = (error: string, status = 400) => json({ error }, status);
@@ -399,7 +399,7 @@ export async function retailMealQuote(env: RetailEnv, manifest: Manifest, body: 
     }
     for (const key of cacheScopeKeys) quoteRuns.set(key, await activeRun(db,key));
     if (mappingsCacheable && cacheScopeKeys.every(key => runCurrentForQuote(quoteRuns.get(key) ?? null,now))) {
-      responseCacheKey = quoteCacheRequestKey(body,meta,retailer,requestedScopeKey,cacheScopeKeys,quoteRuns,currentMappings);
+      responseCacheKey = quoteCacheRequestKey({...body,profileRevision:manifest.enrichment?.revision??null,amountConversionVersion:'usda-sr-2018-v1'},meta,retailer,requestedScopeKey,cacheScopeKeys,quoteRuns,currentMappings);
       if (responseCacheKey) {
         const cached = await responseCache.match(responseCacheKey,now);
         if (cached) return new Response(cached.body,{status:200,headers:{'Content-Type':'application/json',
@@ -417,6 +417,7 @@ export async function retailMealQuote(env: RetailEnv, manifest: Manifest, body: 
   const connections = rows.results.map(r=>JSON.parse(r.document_json) as ReviewedConnection);
   const byName = new Map(connections.map(c=>[c.name,c]));
   const finalists: MenuFinalist[] = [];
+  const conversionReferences = new WeakMap<IngredientDemand,ReturnType<typeof sourcedAmount>>();
   for (const candidate of candidates) {
     const demands: IngredientDemand[] = [];
     for (const selected of candidate.recipes) {
@@ -430,8 +431,10 @@ export async function retailMealQuote(env: RetailEnv, manifest: Manifest, body: 
         const c = byName.get(ingredient.ingredient_original);
         const amount = canonicalAmount(ingredient, scale, overrides[String(index)]).amount;
         const knownUnit = amount?.unit ?? canonicalAmount({...ingredient,measured_quantity:1,quantity_conflict:0}).amount?.unit ?? null;
-        demands.push({ingredientId:c?.ingredientId ?? `missing:${ingredient.ingredient_original}`, name:ingredient.ingredient_original,
-          quantity:amount?.quantity ?? null, unit:knownUnit as QuantityUnit | null, approvedProductIds:[], nonPurchased:c?.status === 'non_purchased'});
+        const demand:IngredientDemand={ingredientId:c?.ingredientId ?? `missing:${ingredient.ingredient_original}`, name:ingredient.ingredient_original,
+          quantity:amount?.quantity ?? null, unit:knownUnit as QuantityUnit | null, approvedProductIds:[], nonPurchased:c?.status === 'non_purchased'};
+        if(!overrides[String(index)]&&amount)conversionReferences.set(demand,sourcedAmount(ingredient,scale));
+        demands.push(demand);
       }
     }
     finalists.push({id:candidate.id, demands, referenceCostOre:null});
@@ -456,7 +459,13 @@ export async function retailMealQuote(env: RetailEnv, manifest: Manifest, body: 
           return !matches || matches.length === 0 || matches.every(observation =>
             productIdentity(observation.product)===p.identity && !reviewedProductPolicy(observation.product,c.name));
         }).map(p=>p.productId)]));
-    return items.map(f=>({...f,demands:f.demands.map(d=>({...d,approvedProductIds:eligible.get(d.ingredientId) ?? []}))}));
+    return items.map(f=>({...f,demands:f.demands.map(d=>{
+      const ids=eligible.get(d.ingredientId)??[],products=ids.flatMap(id=>foundById.get(id)??[]),reference=conversionReferences.get(d);
+      // Preserve an exact compatible unit; use a sourced mass estimate only
+      // when none of the observed approved products accepts the source unit.
+      const convert=!d.nonPurchased&&d.unit!=='g'&&reference&&products.some(o=>o.product.pack?.unit==='g'||o.price?.basis==='kg')&&!products.some(o=>o.product.pack?.unit===d.unit);
+      return {...d,...(convert?{quantity:reference.amount.quantity,unit:'g' as const,conversionEvidence:reference.evidence}:{}),approvedProductIds:ids};
+    })}));
   };
   const referenceFinalists = withApproved(finalists,connections,referenceObservations,reference);
   if(body.priceMode==='local'){
@@ -490,10 +499,11 @@ export async function retailMealQuote(env: RetailEnv, manifest: Manifest, body: 
   const winner = ranked.find(f=>f.basket.complete && f.basket.withinBudget !== false);
   const response = json({retailer,storeId:scope.storeId,channel:scope.channel,slotId:scope.slotId ?? null,
     priceMode:body.priceMode ?? 'reference', priceSource:body.priceMode === 'local' ? 'local-webshop' : 'reference-webshop',
-    datasetId:manifest.datasetId,inventoryHash:manifest.inventoryHash,policyVersion:DIETARY_POLICY_VERSION,
+    datasetId:manifest.datasetId,profileRevision:manifest.enrichment?.revision??null,inventoryHash:manifest.inventoryHash,policyVersion:DIETARY_POLICY_VERSION,
     currency:'SEK',priceScale:'öre',pricedAt:new Date(now).toISOString(),
     earliestPriceExpiry:priced.length ? priced.map(o=>o.expiresAt).sort()[0] : null,
     finalists:ranked,selectedMenuId:winner?.id ?? null,referenceCostIsEstimate:body.priceMode==='local',
+    amountConversions:finalCandidates.map(f=>({id:f.id,ingredients:f.demands.filter(d=>'conversionEvidence' in d).map(d=>({name:d.name,quantity:d.quantity,unit:d.unit,evidence:(d as any).conversionEvidence}))})),
     cheapestVerified:!!winner && ranked.every(f=>f.basket.complete && f.basket.optimizationComplete),
     ...(candidates.length===1 ? {basket:ranked[0].basket} : {}),
     limitations:['Public non-member prices only.','Unknown amounts remain unresolved.','Package cost includes deposit; consumption cost excludes it.','Webshop prices exclude delivery/service fees.']});

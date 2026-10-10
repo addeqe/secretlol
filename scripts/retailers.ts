@@ -40,9 +40,9 @@ function client(id:RetailerId):RetailClient{
 }
 function live(){if(!args['allow-live'])throw new Error('Retailer requests require --allow-live; no scan started');}
 function scope():StoreScope{const s={storeId:args['store-id']!,channel:(args.channel??'pickup') as StoreScope['channel'],...(args['slot-id']?{slotId:args['slot-id']}: {})};validateScope(s);return s;}
-function cloud(dbId:string){
+function cloud(dbId:string,readOnly=false){
   if(!args.remote||!args['confirm-cloudflare']||process.env.RETAILERS_CLOUD_ENABLED!=='true')throw new Error('Cloudflare is disabled. Explicit --remote --confirm-cloudflare and RETAILERS_CLOUD_ENABLED=true are required');
-  return new D1DatabaseClient({databaseId:required(dbId)});
+  return new D1DatabaseClient({databaseId:required(dbId),readOnly});
 }
 function database(id:RetailerId):Database{
   if(args.remote){if(args.local)throw new Error('Choose local or remote, not both');return cloud(id==='coop'?'COOP_DATABASE_ID':'ICA_DATABASE_ID');}
@@ -95,7 +95,7 @@ async function main(){
   }
   if(command==='inventory'){
     if(!args.remote)throw new Error('Authoritative inventory export is a future cloud step; supply remote gates after quota reset');
-    const db=cloud('MEAL_DATABASE_ID');const inventory=await loadCloudRequirements(db);
+    const db=cloud('MEAL_DATABASE_ID',true);const inventory=await loadCloudRequirements(db);
     const output=args.output??'data/retailer-inventory.json';save(output,inventory);console.log(JSON.stringify({output:resolve(output),datasetId:inventory.datasetId,ingredients:inventory.requirements.length,rowsRead:db.rowsRead}));return;
   }
   if(command==='review'){
@@ -133,7 +133,7 @@ async function main(){
       ||publishNow-Date.parse(o.checkedAt)>=86400000||Date.parse(o.expiresAt)<=publishNow;}))throw new Error('Source prices expired; revalidate approved products with --allow-live before publication');
     const db=database(id);
     try{
-      if(args.remote){const authoritative=await loadCloudRequirements(cloud('MEAL_DATABASE_ID'));if(authoritative.datasetId!==data.datasetId||authoritative.hash!==data.inventoryHash)throw new Error('Recipe inventory changed; review refresh required');}
+      if(args.remote){const authoritative=await loadCloudRequirements(cloud('MEAL_DATABASE_ID',true));if(authoritative.datasetId!==data.datasetId||authoritative.hash!==data.inventoryHash)throw new Error('Recipe inventory changed; review refresh required');}
       const ids=[...new Set(data.connections.flatMap(c=>c.approvedProducts.map(p=>p.productId)))];
       const obs=publicationObservations.filter(o=>ids.includes(o.product.id));budget(db,10*data.connections.length+10*ids.length+200);
       // Remote schema is installed as a separate, reviewed migration step.
