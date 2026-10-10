@@ -187,4 +187,4 @@ API:t använder nu en liten gateway och ett separat beräkningslager med Durable
 
 ## Förbättrat recepturval och portionsberäkning
 
-Se [receptprofiler och planeringskontrakt](recipe-planning-profiles.md) för näringsrankning, profilversioner och verifierade referensomräkningar. `datasetId` identifierar samma grundarkiv; `profileRevision` identifierar aktuella klassningar och portionsuppgifter. Appen ska kontrollera båda under urval och slutlig prisberäkning.
+Se [receptprofiler och planeringskontrakt](recipe-planning-profiles.md) för näringsrankning, profilversioner och verifierade referensomräkningar. `datasetId` identifierar samma grundarkiv; `profileRevision` identifierar aktuella klassningar, portionsuppgifter och versionen av referensomräkningarna. Appen ska kontrollera båda under urval och slutlig prisberäkning.

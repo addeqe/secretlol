@@ -22,10 +22,12 @@ const list=(u:URL,k:string)=>[...new Set((u.searchParams.get(k)??'').split(',').
 const positiveId=(s:unknown)=>typeof s==='number'?Number.isSafeInteger(s)&&s>0:typeof s==='string'&&/^[1-9]\d{0,9}$/.test(s);
 function bounded(u:URL,key:string,fallback:number,min:number,max:number){const n=Number(u.searchParams.get(key)??fallback);if(!Number.isSafeInteger(n)||n<min||n>max)throw new Error('invalid_'+key);return n;}
 async function activeRun(env:MealEnv,m:Manifest){
-  const snapshot=await env.DB.prepare(`SELECT s.id,s.store_id,s.completed_at FROM snapshots s WHERE s.id=(SELECT value FROM catalog_state WHERE key='active_snapshot') AND s.status='complete'`).first<{id:string;store_id:string;completed_at:string}>();
+  const snapshot=await env.DB.prepare(`SELECT s.id,s.store_id,s.completed_at,s.report_json FROM snapshots s WHERE s.id=(SELECT value FROM catalog_state WHERE key='active_snapshot') AND s.status='complete'`).first<{id:string;store_id:string;completed_at:string;report_json:string}>();
   const run=await env.DB.prepare(`SELECT * FROM ingredient_runs WHERE id=(SELECT value FROM catalog_state WHERE key='active_ingredient_run') AND status='complete'`).first<Run>();
   const current=!!snapshot&&!!run&&snapshot.id===run.catalogue_snapshot_id&&run.inventory_hash===m.inventoryHash&&run.requirements===m.distinctIngredients&&JSON.parse(run.report_json).dietaryPolicy?.version===DIETARY_POLICY_VERSION;
-  return {snapshot,run,current};
+  let freshness:{catalogueObservedAt:string;catalogueExpiresAt:string;catalogueFresh:boolean}|undefined;
+  if(snapshot?.report_json){try{const observedAt=(JSON.parse(snapshot.report_json) as {oldestObservation?:unknown}).oldestObservation;if(typeof observedAt==='string'){const observed=Date.parse(observedAt),expires=observed+86400000;if(Number.isFinite(observed)&&Number.isFinite(expires))freshness={catalogueObservedAt:new Date(observed).toISOString(),catalogueExpiresAt:new Date(expires).toISOString(),catalogueFresh:observed<=Date.now()+60000&&expires>Date.now()};}}catch{/* Older snapshots may not carry source observation metadata. */}}
+  return {snapshot,run,current,...freshness};
 }
 async function quoteRecipeData(env:MealEnv,m:Manifest,ids:number[]){
   const found=new Map<number,any>(),missing:number[]=[];
@@ -142,7 +144,7 @@ export async function mealRoutes(request:Request,env:MealEnv,requestJson:(r:Requ
     // current part's range, never the full recipe table.
     if(meta.uploaded_recipe_count===undefined&&m&&progress.results.length<5){const next=m.parts?.[progress.results.length];if(next){const partial=await env.MEAL_DB.prepare('SELECT COUNT(*) AS n FROM meal_recipes WHERE dataset_id=? AND recipe_id BETWEEN ? AND ?').bind(m.datasetId,next.firstId,next.lastId).first<{n:number}>();uploadedRecipes+=partial?.n??0;}}
     return respond({ready:!!m&&meta.ready===m.datasetId,datasetId:m?.datasetId??null,totalRecipes:m?.recipes??0,uploadedRecipes,completedParts:progress.results.length,totalParts:5,parts:progress.results,ingredientOccurrences:m?.ingredientOccurrences??0,distinctIngredients:m?.distinctIngredients??0,reviews:m?.reviews??0,
-      connectionsCurrent:version?.current??false,connectionRunId:version?.run?.id??null,catalogueSnapshotId:version?.snapshot?.id??null,connectionInventory:'cloud-recipe-database',apiVersion:'1',storage:'Cloudflare D1',localFilesRequired:false});
+      connectionsCurrent:version?.current??false,connectionRunId:version?.run?.id??null,catalogueSnapshotId:version?.snapshot?.id??null,...(version?.catalogueFresh===undefined?{}:{catalogueFresh:version.catalogueFresh,catalogueObservedAt:version.catalogueObservedAt,catalogueExpiresAt:version.catalogueExpiresAt}),connectionInventory:'cloud-recipe-database',apiVersion:'1',storage:'Cloudflare D1',localFilesRequired:false});
   }
   if(!m||meta.ready!==m.datasetId)return fail('recipe_import_in_progress',503,{statusUrl:'/meal/status'});
   if(route==='/meal/dataset'&&request.method==='GET'){
