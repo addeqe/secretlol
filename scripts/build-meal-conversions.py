@@ -43,21 +43,21 @@ FOOD_GROUPS: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
     ("175040", "Leavening agents, baking soda", "Exact baking-soda identity; duplicated half-teaspoon records are reduced to their equivalent per-unit value.", ("baking soda", "bicarbonate of soda")),
     ("172803", "Leavening agents, baking powder, double-acting, sodium aluminum sulfate", "Generic baking powder mapped to the USDA double-acting reference; all resulting conversions are marked approximate.", ("baking powder",)),
     ("171320", "Spices, cinnamon, ground", "Ground cinnamon only; cinnamon sticks are excluded.", ("ground cinnamon",)),
-    ("171326", "Spices, nutmeg, ground", "Ground nutmeg only.", ("nutmeg", "ground nutmeg")),
+    ("171326", "Spices, nutmeg, ground", "Ground nutmeg only.", ("ground nutmeg",)),
     ("170926", "Spices, ginger, ground", "Ground ginger only; fresh ginger root is separate.", ("ground ginger", "ginger powder", "powdered ginger")),
-    ("171325", "Spices, garlic powder", "Garlic powder only; raw garlic is separate.", ("garlic powder", "dried garlic")),
+    ("171325", "Spices, garlic powder", "Garlic powder only; raw garlic and dried garlic flakes/granules are separate.", ("garlic powder",)),
     ("171329", "Spices, paprika", "Paprika spice; no distinct smoked/hot variant is mapped.", ("paprika", "sweet paprika", "hot paprika")),
     ("170931", "Spices, pepper, black", "Ground black pepper only; peppercorns and coarse pepper are excluded.", ("black pepper", "ground black pepper", "fresh ground black pepper", "fresh ground pepper", "fresh black pepper")),
-    ("170932", "Spices, pepper, red or cayenne", "Cayenne/red pepper powder; fresh peppers and flakes are excluded.", ("cayenne", "cayenne pepper", "ground cayenne pepper")),
+    ("170932", "Spices, pepper, red or cayenne", "Ground cayenne/red pepper powder only; unspecified cayenne and fresh peppers are excluded.", ("ground cayenne pepper",)),
     ("170923", "Spices, cumin seed", "Whole cumin seed only; ground cumin is excluded.", ("cumin seed", "cumin seeds")),
     ("170922", "Spices, coriander seed", "Whole coriander seed only; ground coriander is excluded.", ("coriander seed", "coriander seeds")),
     ("171321", "Spices, cloves, ground", "Ground cloves only; whole cloves are excluded.", ("ground cloves",)),
-    ("171315", "Spices, allspice, ground", "Ground allspice only; berries are excluded.", ("ground allspice", "allspice", "allspice powder")),
-    ("172231", "Spices, turmeric, ground", "Ground turmeric only.", ("ground turmeric", "turmeric", "turmeric powder", "haldi powder")),
+    ("171315", "Spices, allspice, ground", "Ground allspice only; unqualified allspice and berries are excluded.", ("ground allspice", "allspice powder")),
+    ("172231", "Spices, turmeric, ground", "Ground turmeric only; unqualified turmeric is excluded because raw root and ground spice differ.", ("ground turmeric", "turmeric powder", "haldi powder")),
     ("171328", "Spices, oregano, dried", "Dried oregano only; fresh oregano is excluded.", ("dried oregano", "dry oregano", "dried oregano leaves", "dry oregano leaves")),
     ("171317", "Spices, basil, dried", "Dried basil only; fresh basil is excluded.", ("dried basil", "dry basil", "dried basil leaves", "dried leaf basil")),
     ("170938", "Spices, thyme, dried", "Dried thyme only; fresh thyme is excluded.", ("dried thyme", "dry thyme", "dried thyme leaves", "dry thyme leaves")),
-    ("175043", "Leavening agents, yeast, baker's, active dry", "Active dry baker's yeast only; fresh/compressed and instant yeast are excluded.", ("active dry yeast", "dry yeast")),
+    ("175043", "Leavening agents, yeast, baker's, active dry", "Active dry baker's yeast only; unspecified dry, instant, fresh/compressed yeast are excluded.", ("active dry yeast",)),
     ("169640", "Honey", "Honey; source provides direct cup/tablespoon measures.", ("honey", "liquid honey")),
     ("167747", "Lemon juice, raw", "Fresh/raw lemon juice; bottled/concentrated juice is a separate source food.", ("fresh lemon juice",)),
     ("167748", "Lemon juice from concentrate, canned or bottled", "Bottled/concentrated lemon juice only.", ("bottled lemon juice",)),
@@ -71,7 +71,8 @@ FOOD_GROUPS: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
     ("171287", "Egg, whole, raw, fresh", "Raw whole egg. Count weights are exposed only for an explicitly named USDA size.", ("large egg", "large eggs", "medium egg", "medium eggs", "small egg", "small eggs")),
     ("173944", "Bananas, raw", "Raw bananas. Count weights are exposed only for an explicitly named USDA size.", ("small banana", "small bananas", "medium banana", "medium bananas", "large banana", "large bananas")),
     ("169988", "Celery, raw", "Raw celery. Count weights require an explicitly size-qualified stalk name.", ("small celery stalk", "medium celery stalk", "large celery stalk")),
-    ("169705", "Oats (Includes foods for USDA's Food Distribution Program)", "Plain dry oats; cooked oatmeal and flavored cereals are excluded.", ("oats", "rolled oats", "old fashioned oats", "old-fashioned oatmeal", "porridge oats", "quick oats", "quick-cooking oats")),
+    ("173904", "Cereals, oats, regular and quick, not fortified, dry", "Dry regular/rolled oats; source cup is 81g. Generic `Oats` (FDC 169705, 156g/cup) is not used because its grain/preparation form is ambiguous.", ("rolled oats", "old fashioned oats", "old-fashioned oatmeal", "porridge oats")),
+    ("172989", "Cereals, QUAKER, Quick Oats, Dry", "Explicit quick oats; source half-cup is 40g (80g/cup). Generic `Oats` is not used because its grain/preparation form is ambiguous.", ("quick oats", "quick-cooking oats")),
     ("171284", "Yogurt, plain, whole milk", "Plain whole-milk yogurt only.", ("plain whole-milk yogurt", "full-fat plain yogurt")),
     ("170886", "Yogurt, plain, low fat", "Plain low-fat yogurt only.", ("plain low-fat yogurt", "low-fat plain yogurt")),
     ("173442", "Sour cream, reduced fat", "Reduced-fat sour cream only; regular/fat-free remain unmapped.", ("reduced-fat sour cream", "light sour cream")),
@@ -138,7 +139,7 @@ def build(archive_path: Path, requirements_path: Path) -> tuple[dict[str, Any], 
                 raise ValueError(f"Ingredient alias has conflicting curated matches: {alias!r}")
             alias_specs[key] = spec
 
-    portions_by_food_unit: dict[tuple[str, str], dict[str, dict[str, Any]]] = defaultdict(dict)
+    portions_by_food_unit: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for row in portion_rows:
         fdc_id = str(row.get("fdc_id", ""))
         if fdc_id not in {spec[0] for spec in alias_specs.values()}:
@@ -166,7 +167,7 @@ def build(archive_path: Path, requirements_path: Path) -> tuple[dict[str, Any], 
             "gramWeight": grams,
             "gramsPerUnit": round(grams_per_unit, 5),
         }
-        portions_by_food_unit[(fdc_id, unit)][measure] = evidence
+        portions_by_food_unit[(fdc_id, unit)].append(evidence)
 
     source_foods: dict[str, Any] = {}
     out: dict[str, int] = {}
@@ -180,10 +181,16 @@ def build(archive_path: Path, requirements_path: Path) -> tuple[dict[str, Any], 
             continue
         units: dict[str, Any] = {}
         for unit in ("cup", "tablespoon", "teaspoon", "count"):
-            evidences = list(portions_by_food_unit.get((fdc_id, unit), {}).values())
+            evidences = [entry for entry in portions_by_food_unit.get((fdc_id, unit), []) if entry["measure"] in ("small", "medium", "large") or unit != "count"]
             permitted_sizes = {size for size in ("small", "medium", "large") if re.search(rf"\b{size}\b", alias)} if unit == "count" else set()
             if unit == "count":
                 evidences = [entry for entry in evidences if entry["measure"] in permitted_sizes]
+            # A source portion for one full unit is a more reliable basis than
+            # a rounded fractional label such as 0.33 cup; use fractions only
+            # where USDA supplies no direct 1-unit portion (for example 0.5
+            # cup of branded quick oats).
+            if unit != "count" and any(entry["amountBasis"] == 1 for entry in evidences):
+                evidences = [entry for entry in evidences if entry["amountBasis"] == 1]
             if not evidences:
                 continue
             # A unit with distinct measures cannot be resolved from ingredient
@@ -225,16 +232,20 @@ def build(archive_path: Path, requirements_path: Path) -> tuple[dict[str, Any], 
             mapped_occurrences += int(req.get("occurrences", 0))
 
     archive_sha = hashlib.sha256(archive_path.read_bytes()).hexdigest()
-    dataset = {
-        "schemaVersion": 1,
-        "source": {
+    source = {
             "name": "USDA FoodData Central SR Legacy",
             "release": "April 2018",
             "archiveSha256": archive_sha,
             "license": "CC0 1.0",
             "citation": "U.S. Department of Agriculture, Agricultural Research Service. FoodData Central, SR Legacy April 2018. https://fdc.nal.usda.gov/",
             "uncertaintyPolicy": "All reference conversions are approximate and carry a conservative ±20% planning allowance; the USDA source does not publish uncertainty bounds for food portions.",
-        },
+        }
+    revision_material = json.dumps({"source": source, "foods": source_foods, "ingredients": out}, sort_keys=True, separators=(",", ":")).encode()
+    asset_revision = f"usda-sr-2018-{hashlib.sha256(revision_material).hexdigest()[:12]}"
+    dataset = {
+        "schemaVersion": 1,
+        "revision": asset_revision,
+        "source": source,
         "foods": source_foods,
         "ingredients": out,
     }
@@ -244,6 +255,7 @@ def build(archive_path: Path, requirements_path: Path) -> tuple[dict[str, Any], 
         "mappedNames": len(mapped_names),
         "mappedOccurrences": mapped_occurrences,
         "assetEntries": len(out),
+        "revision": asset_revision,
         "volumeEntries": sum(sum(1 for unit in entry["conversions"] if unit != "count") for entry in source_foods.values()),
         "countEntries": sum(len(entry["conversions"].get("count", {})) for entry in source_foods.values()),
     }

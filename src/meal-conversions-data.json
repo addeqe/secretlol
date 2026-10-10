@@ -1,5 +1,6 @@
 {
   "schemaVersion": 1,
+  "revision": "usda-sr-2018-af8118980e2b",
   "source": {
     "name": "USDA FoodData Central SR Legacy",
     "release": "April 2018",
@@ -12,7 +13,7 @@
     "175043": {
       "description": "Leavening agents, yeast, baker's, active dry",
       "mappingMethod": "curated-exact-food-equivalence",
-      "mappingRationale": "Active dry baker's yeast only; fresh/compressed and instant yeast are excluded.",
+      "mappingRationale": "Active dry baker's yeast only; unspecified dry, instant, fresh/compressed yeast are excluded.",
       "conversions": {
         "tablespoon": {
           "gramsPerUnit": 12.0,
@@ -71,45 +72,6 @@
         }
       }
     },
-    "171315": {
-      "description": "Spices, allspice, ground",
-      "mappingMethod": "curated-exact-food-equivalence",
-      "mappingRationale": "Ground allspice only; berries are excluded.",
-      "conversions": {
-        "tablespoon": {
-          "gramsPerUnit": 6.0,
-          "measure": "tbsp",
-          "sourceMeasures": [
-            {
-              "measure": "tbsp",
-              "portionDescription": "",
-              "sourceModifier": "tbsp",
-              "amountBasis": 1.0,
-              "gramWeight": 6.0,
-              "gramsPerUnit": 6.0
-            }
-          ],
-          "approximate": true,
-          "uncertaintyPercent": 20
-        },
-        "teaspoon": {
-          "gramsPerUnit": 1.9,
-          "measure": "tsp",
-          "sourceMeasures": [
-            {
-              "measure": "tsp",
-              "portionDescription": "",
-              "sourceModifier": "tsp",
-              "amountBasis": 1.0,
-              "gramWeight": 1.9,
-              "gramsPerUnit": 1.9
-            }
-          ],
-          "approximate": true,
-          "uncertaintyPercent": 20
-        }
-      }
-    },
     "172803": {
       "description": "Leavening agents, baking powder, double-acting, sodium aluminum sulfate",
       "mappingMethod": "curated-exact-food-equivalence",
@@ -123,8 +85,8 @@
               "measure": "tsp",
               "portionDescription": "",
               "sourceModifier": "tsp",
-              "amountBasis": 0.5,
-              "gramWeight": 2.3,
+              "amountBasis": 1.0,
+              "gramWeight": 4.6,
               "gramsPerUnit": 4.6
             }
           ],
@@ -146,8 +108,8 @@
               "measure": "tsp",
               "portionDescription": "",
               "sourceModifier": "tsp",
-              "amountBasis": 0.5,
-              "gramWeight": 2.3,
+              "amountBasis": 1.0,
+              "gramWeight": 4.6,
               "gramsPerUnit": 4.6
             }
           ],
@@ -367,45 +329,6 @@
         }
       }
     },
-    "170932": {
-      "description": "Spices, pepper, red or cayenne",
-      "mappingMethod": "curated-exact-food-equivalence",
-      "mappingRationale": "Cayenne/red pepper powder; fresh peppers and flakes are excluded.",
-      "conversions": {
-        "tablespoon": {
-          "gramsPerUnit": 5.3,
-          "measure": "tbsp",
-          "sourceMeasures": [
-            {
-              "measure": "tbsp",
-              "portionDescription": "",
-              "sourceModifier": "tbsp",
-              "amountBasis": 1.0,
-              "gramWeight": 5.3,
-              "gramsPerUnit": 5.3
-            }
-          ],
-          "approximate": true,
-          "uncertaintyPercent": 20
-        },
-        "teaspoon": {
-          "gramsPerUnit": 1.8,
-          "measure": "tsp",
-          "sourceMeasures": [
-            {
-              "measure": "tsp",
-              "portionDescription": "",
-              "sourceModifier": "tsp",
-              "amountBasis": 1.0,
-              "gramWeight": 1.8,
-              "gramsPerUnit": 1.8
-            }
-          ],
-          "approximate": true,
-          "uncertaintyPercent": 20
-        }
-      }
-    },
     "169656": {
       "description": "Sugars, powdered",
       "mappingMethod": "curated-exact-food-equivalence",
@@ -445,45 +368,6 @@
               "amountBasis": 1.0,
               "gramWeight": 128.0,
               "gramsPerUnit": 128.0
-            }
-          ],
-          "approximate": true,
-          "uncertaintyPercent": 20
-        }
-      }
-    },
-    "171325": {
-      "description": "Spices, garlic powder",
-      "mappingMethod": "curated-exact-food-equivalence",
-      "mappingRationale": "Garlic powder only; raw garlic is separate.",
-      "conversions": {
-        "tablespoon": {
-          "gramsPerUnit": 9.7,
-          "measure": "tbsp",
-          "sourceMeasures": [
-            {
-              "measure": "tbsp",
-              "portionDescription": "",
-              "sourceModifier": "tbsp",
-              "amountBasis": 1.0,
-              "gramWeight": 9.7,
-              "gramsPerUnit": 9.7
-            }
-          ],
-          "approximate": true,
-          "uncertaintyPercent": 20
-        },
-        "teaspoon": {
-          "gramsPerUnit": 3.1,
-          "measure": "tsp",
-          "sourceMeasures": [
-            {
-              "measure": "tsp",
-              "portionDescription": "",
-              "sourceModifier": "tsp",
-              "amountBasis": 1.0,
-              "gramWeight": 3.1,
-              "gramsPerUnit": 3.1
             }
           ],
           "approximate": true,
@@ -647,6 +531,45 @@
         }
       }
     },
+    "171325": {
+      "description": "Spices, garlic powder",
+      "mappingMethod": "curated-exact-food-equivalence",
+      "mappingRationale": "Garlic powder only; raw garlic and dried garlic flakes/granules are separate.",
+      "conversions": {
+        "tablespoon": {
+          "gramsPerUnit": 9.7,
+          "measure": "tbsp",
+          "sourceMeasures": [
+            {
+              "measure": "tbsp",
+              "portionDescription": "",
+              "sourceModifier": "tbsp",
+              "amountBasis": 1.0,
+              "gramWeight": 9.7,
+              "gramsPerUnit": 9.7
+            }
+          ],
+          "approximate": true,
+          "uncertaintyPercent": 20
+        },
+        "teaspoon": {
+          "gramsPerUnit": 3.1,
+          "measure": "tsp",
+          "sourceMeasures": [
+            {
+              "measure": "tsp",
+              "portionDescription": "",
+              "sourceModifier": "tsp",
+              "amountBasis": 1.0,
+              "gramWeight": 3.1,
+              "gramsPerUnit": 3.1
+            }
+          ],
+          "approximate": true,
+          "uncertaintyPercent": 20
+        }
+      }
+    },
     "170926": {
       "description": "Spices, ginger, ground",
       "mappingMethod": "curated-exact-food-equivalence",
@@ -663,6 +586,84 @@
               "amountBasis": 1.0,
               "gramWeight": 5.2,
               "gramsPerUnit": 5.2
+            }
+          ],
+          "approximate": true,
+          "uncertaintyPercent": 20
+        },
+        "teaspoon": {
+          "gramsPerUnit": 1.8,
+          "measure": "tsp",
+          "sourceMeasures": [
+            {
+              "measure": "tsp",
+              "portionDescription": "",
+              "sourceModifier": "tsp",
+              "amountBasis": 1.0,
+              "gramWeight": 1.8,
+              "gramsPerUnit": 1.8
+            }
+          ],
+          "approximate": true,
+          "uncertaintyPercent": 20
+        }
+      }
+    },
+    "171315": {
+      "description": "Spices, allspice, ground",
+      "mappingMethod": "curated-exact-food-equivalence",
+      "mappingRationale": "Ground allspice only; unqualified allspice and berries are excluded.",
+      "conversions": {
+        "tablespoon": {
+          "gramsPerUnit": 6.0,
+          "measure": "tbsp",
+          "sourceMeasures": [
+            {
+              "measure": "tbsp",
+              "portionDescription": "",
+              "sourceModifier": "tbsp",
+              "amountBasis": 1.0,
+              "gramWeight": 6.0,
+              "gramsPerUnit": 6.0
+            }
+          ],
+          "approximate": true,
+          "uncertaintyPercent": 20
+        },
+        "teaspoon": {
+          "gramsPerUnit": 1.9,
+          "measure": "tsp",
+          "sourceMeasures": [
+            {
+              "measure": "tsp",
+              "portionDescription": "",
+              "sourceModifier": "tsp",
+              "amountBasis": 1.0,
+              "gramWeight": 1.9,
+              "gramsPerUnit": 1.9
+            }
+          ],
+          "approximate": true,
+          "uncertaintyPercent": 20
+        }
+      }
+    },
+    "170932": {
+      "description": "Spices, pepper, red or cayenne",
+      "mappingMethod": "curated-exact-food-equivalence",
+      "mappingRationale": "Ground cayenne/red pepper powder only; unspecified cayenne and fresh peppers are excluded.",
+      "conversions": {
+        "tablespoon": {
+          "gramsPerUnit": 5.3,
+          "measure": "tbsp",
+          "sourceMeasures": [
+            {
+              "measure": "tbsp",
+              "portionDescription": "",
+              "sourceModifier": "tbsp",
+              "amountBasis": 1.0,
+              "gramWeight": 5.3,
+              "gramsPerUnit": 5.3
             }
           ],
           "approximate": true,
@@ -806,7 +807,7 @@
     "172231": {
       "description": "Spices, turmeric, ground",
       "mappingMethod": "curated-exact-food-equivalence",
-      "mappingRationale": "Ground turmeric only.",
+      "mappingRationale": "Ground turmeric only; unqualified turmeric is excluded because raw root and ground spice differ.",
       "conversions": {
         "tablespoon": {
           "gramsPerUnit": 9.4,
@@ -975,13 +976,13 @@
         }
       }
     },
-    "169705": {
-      "description": "Oats (Includes foods for USDA's Food Distribution Program)",
+    "173904": {
+      "description": "Cereals, oats, regular and quick, not fortified, dry",
       "mappingMethod": "curated-exact-food-equivalence",
-      "mappingRationale": "Plain dry oats; cooked oatmeal and flavored cereals are excluded.",
+      "mappingRationale": "Dry regular/rolled oats; source cup is 81g. Generic `Oats` (FDC 169705, 156g/cup) is not used because its grain/preparation form is ambiguous.",
       "conversions": {
         "cup": {
-          "gramsPerUnit": 156.0,
+          "gramsPerUnit": 81.0,
           "measure": "cup",
           "sourceMeasures": [
             {
@@ -989,8 +990,8 @@
               "portionDescription": "",
               "sourceModifier": "cup",
               "amountBasis": 1.0,
-              "gramWeight": 156.0,
-              "gramsPerUnit": 156.0
+              "gramWeight": 81.0,
+              "gramsPerUnit": 81.0
             }
           ],
           "approximate": true,
@@ -1014,6 +1015,29 @@
               "amountBasis": 1.0,
               "gramWeight": 160.0,
               "gramsPerUnit": 160.0
+            }
+          ],
+          "approximate": true,
+          "uncertaintyPercent": 20
+        }
+      }
+    },
+    "172989": {
+      "description": "Cereals, QUAKER, Quick Oats, Dry",
+      "mappingMethod": "curated-exact-food-equivalence",
+      "mappingRationale": "Explicit quick oats; source half-cup is 40g (80g/cup). Generic `Oats` is not used because its grain/preparation form is ambiguous.",
+      "conversions": {
+        "cup": {
+          "gramsPerUnit": 80.0,
+          "measure": "cup",
+          "sourceMeasures": [
+            {
+              "measure": "cup",
+              "portionDescription": "",
+              "sourceModifier": "cup",
+              "amountBasis": 0.5,
+              "gramWeight": 40.0,
+              "gramsPerUnit": 80.0
             }
           ],
           "approximate": true,
@@ -1113,7 +1137,6 @@
     "active dry yeast": 175043,
     "all-purpose flour": 168894,
     "all-purpose white flour": 168894,
-    "allspice": 171315,
     "baking powder": 172803,
     "baking soda": 175040,
     "bicarbonate of soda": 175040,
@@ -1122,12 +1145,8 @@
     "butter": 173410,
     "canola oil": 172336,
     "caster sugar": 169655,
-    "cayenne": 170932,
-    "cayenne pepper": 170932,
     "confectioners' sugar": 169656,
     "cornstarch": 169698,
-    "dried garlic": 171325,
-    "dry yeast": 175043,
     "extra virgin olive oil": 171413,
     "fresh garlic": 169230,
     "fresh lemon juice": 167747,
@@ -1155,21 +1174,19 @@
     "lemon zest": 167749,
     "liquid honey": 169640,
     "non-iodized salt": 173468,
-    "nutmeg": 171326,
-    "oats": 169705,
-    "old fashioned oats": 169705,
-    "old-fashioned oatmeal": 169705,
+    "old fashioned oats": 173904,
+    "old-fashioned oatmeal": 173904,
     "olive oil": 171413,
     "paprika": 171329,
     "plain flour": 168894,
     "plain white flour": 168894,
-    "porridge oats": 169705,
+    "porridge oats": 173904,
     "potato flour": 168446,
     "powdered ginger": 170926,
     "powdered sugar": 169656,
-    "quick oats": 169705,
-    "quick-cooking oats": 169705,
-    "rolled oats": 169705,
+    "quick oats": 172989,
+    "quick-cooking oats": 172989,
+    "rolled oats": 173904,
     "salt": 173468,
     "salted butter": 173410,
     "small onion": 170000,
@@ -1178,7 +1195,6 @@
     "sweet butter": 173410,
     "sweet paprika": 171329,
     "table salt": 173468,
-    "turmeric": 172231,
     "turmeric powder": 172231,
     "unbleached all-purpose flour": 168894,
     "unbleached flour": 168894,

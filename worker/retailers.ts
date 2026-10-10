@@ -1,3 +1,4 @@
+import {publicProfileRevision} from './meal-enrichment.ts';
 import { CoopClient } from '../src/retailers/coop.ts';
 import { IcaClient } from '../src/retailers/ica.ts';
 import { cachedIngredientPolicy, observationUsable, productIdentity, reviewedProductPolicy, type ReviewedConnection } from '../src/retailers/identity.ts';
@@ -399,7 +400,7 @@ export async function retailMealQuote(env: RetailEnv, manifest: Manifest, body: 
     }
     for (const key of cacheScopeKeys) quoteRuns.set(key, await activeRun(db,key));
     if (mappingsCacheable && cacheScopeKeys.every(key => runCurrentForQuote(quoteRuns.get(key) ?? null,now))) {
-      responseCacheKey = quoteCacheRequestKey({...body,profileRevision:manifest.enrichment?.revision??null,amountConversionVersion:'usda-sr-2018-v1'},meta,retailer,requestedScopeKey,cacheScopeKeys,quoteRuns,currentMappings);
+      responseCacheKey = quoteCacheRequestKey({...body,profileRevision:publicProfileRevision(manifest.enrichment)},meta,retailer,requestedScopeKey,cacheScopeKeys,quoteRuns,currentMappings);
       if (responseCacheKey) {
         const cached = await responseCache.match(responseCacheKey,now);
         if (cached) return new Response(cached.body,{status:200,headers:{'Content-Type':'application/json',
@@ -499,7 +500,7 @@ export async function retailMealQuote(env: RetailEnv, manifest: Manifest, body: 
   const winner = ranked.find(f=>f.basket.complete && f.basket.withinBudget !== false);
   const response = json({retailer,storeId:scope.storeId,channel:scope.channel,slotId:scope.slotId ?? null,
     priceMode:body.priceMode ?? 'reference', priceSource:body.priceMode === 'local' ? 'local-webshop' : 'reference-webshop',
-    datasetId:manifest.datasetId,profileRevision:manifest.enrichment?.revision??null,inventoryHash:manifest.inventoryHash,policyVersion:DIETARY_POLICY_VERSION,
+    datasetId:manifest.datasetId,profileRevision:publicProfileRevision(manifest.enrichment),inventoryHash:manifest.inventoryHash,policyVersion:DIETARY_POLICY_VERSION,
     currency:'SEK',priceScale:'öre',pricedAt:new Date(now).toISOString(),
     earliestPriceExpiry:priced.length ? priced.map(o=>o.expiresAt).sort()[0] : null,
     finalists:ranked,selectedMenuId:winner?.id ?? null,referenceCostIsEstimate:body.priceMode==='local',

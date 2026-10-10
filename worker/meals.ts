@@ -1,4 +1,4 @@
-import {parseCandidateProfile,recipePatches,mergeRecipePatch,mergeSummaryPatch,ingredientPatches,rankedRecipeIds,type EnrichmentManifest} from './meal-enrichment.ts';
+import {publicProfileRevision,parseCandidateProfile,recipePatches,mergeRecipePatch,mergeSummaryPatch,ingredientPatches,rankedRecipeIds,type EnrichmentManifest} from './meal-enrichment.ts';
 import {ingredientPolicy,productPolicy,DIETARY_POLICY_VERSION} from '../src/dietary-policy.ts';
 import {packInfo} from '../src/product-pack.ts';
 import {calculateLine,aggregateShopping,conversionPolicy,sourcedAmount} from '../src/meal-cost.ts';
@@ -114,7 +114,7 @@ async function quote(request:Request,env:MealEnv,m:Manifest,body:any){
   }
   const shopping=aggregateShopping(allLines),complete=unresolved.length===0;
   const purchaseComplete=complete&&shopping.every(s=>s.purchaseCostOre!==null&&s.depositOre!==null);
-  return json({datasetId:m.datasetId,profileRevision:m.enrichment?.revision??null,catalogueSnapshotId:live.version.snapshot!.id,connectionRunId:live.version.run!.id,storeId:live.version.snapshot!.store_id,currency:'SEK',priceScale:'öre',pricedAt:new Date().toISOString(),complete,purchaseComplete,
+  return json({datasetId:m.datasetId,profileRevision:publicProfileRevision(m.enrichment),catalogueSnapshotId:live.version.snapshot!.id,connectionRunId:live.version.run!.id,storeId:live.version.snapshot!.store_id,currency:'SEK',priceScale:'öre',pricedAt:new Date().toISOString(),complete,purchaseComplete,
     consumedCostOre:complete?Math.round(consumed):null,knownConsumedCostOre:Math.round(consumed),purchaseCostOre:purchaseComplete?shopping.reduce((n,s)=>n+s.purchaseCostOre!+s.depositOre!,0):null,
     knownPurchaseCostOre:shopping.reduce((n,s)=>n+(s.purchaseCostOre??0)+(s.depositOre??0),0),recipes:recipeResults,shoppingList:shopping,unresolved,conversionPolicy,
     earliestPriceExpiry:shopping.length?shopping.map(s=>s.expiresAt).sort()[0]:null});
@@ -130,7 +130,7 @@ export async function mealRoutes(request:Request,env:MealEnv,requestJson:(r:Requ
   const state=await env.MEAL_DB.prepare("SELECT key,value FROM meal_meta WHERE key IN ('active_dataset','manifest','ready','uploaded_recipe_count','enrichment')").all<{key:string;value:string}>();
   const meta=Object.fromEntries(state.results.map(r=>[r.key,r.value]));const m=meta.manifest?JSON.parse(meta.manifest) as Manifest:null;
   if(m&&meta.enrichment){const enrichment=JSON.parse(meta.enrichment) as EnrichmentManifest;if(enrichment.baseDatasetId!==m.datasetId||enrichment.recipes!==m.recipes)throw new Error('enrichment_dataset_mismatch');m.enrichment=enrichment;}
-  const revision=m?.enrichment?.revision??null;
+  const revision=publicProfileRevision(m?.enrichment);
   const respond=(value:any,status=200)=>json({...value,profileRevision:revision},status);
   if(route==='/meal/status'&&request.method==='GET'){
     const progress=m?await env.MEAL_DB.prepare('SELECT part,completed_at,recipe_count FROM meal_import_progress WHERE dataset_id=? ORDER BY part').bind(m.datasetId).all<{part:number;completed_at:string;recipe_count:number}>():{results:[]};

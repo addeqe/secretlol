@@ -105,16 +105,30 @@ export class WillysClient {
   }
   async category(path: string, page = 0): Promise<Page> {
     const data = await this.request(`/axfood/rest/v2/c?${new URLSearchParams({ p: path, page: String(page), size: '100', sort: 'name-asc' })}`);
-    validatePage(data, page); return data;
+    validatePage(data, page, path); return data;
   }
   async stores() { return this.request('/axfood/rest/v2/store?online=true'); }
 }
-export function validatePage(data: any, page: number): asserts data is Page {
+export function validatePage(data: any, page: number, categoryPath?: string): asserts data is Page {
   const p = data?.pagination;
-  if (!Array.isArray(data?.results) || !p || ![p.currentPage, p.pageSize, p.numberOfPages, p.totalNumberOfResults].every(Number.isSafeInteger)
-    || p.currentPage !== page || p.pageSize < 1 || p.pageSize > 100 || p.numberOfPages < 0 || p.totalNumberOfResults < 0
-    || p.numberOfPages !== Math.ceil(p.totalNumberOfResults / p.pageSize)
-    || data.results.some((item: SourceProduct) => !item || typeof item.code !== 'string' || typeof item.name !== 'string')) {
-    throw new Error('Unexpected Willys pagination/product response. Incomplete scan will not be published.');
+  const resultsAreArray = Array.isArray(data?.results);
+  const invalidProducts = resultsAreArray ? data.results.filter((item: SourceProduct) => !item || typeof item.code !== 'string' || !item.code || typeof item.name !== 'string' || !item.name).length : null;
+  const problems: string[] = [];
+  if (!resultsAreArray) problems.push('results is not an array');
+  if (!p) problems.push('pagination is missing');
+  else {
+    if (![p.currentPage, p.pageSize, p.numberOfPages, p.totalNumberOfResults].every(Number.isSafeInteger)) problems.push('pagination fields are not safe integers');
+    if (p.currentPage !== page) problems.push('currentPage differs from request');
+    if (p.pageSize < 1 || p.pageSize > 100) problems.push('pageSize is outside 1..100');
+    if (p.numberOfPages < 0 || p.totalNumberOfResults < 0) problems.push('negative page or result count');
+    if (Number.isSafeInteger(p.pageSize) && p.pageSize > 0 && Number.isSafeInteger(p.numberOfPages) && Number.isSafeInteger(p.totalNumberOfResults)
+      && p.numberOfPages !== Math.ceil(p.totalNumberOfResults / p.pageSize)) problems.push('numberOfPages does not match totalNumberOfResults/pageSize');
+  }
+  if (invalidProducts) problems.push(`${invalidProducts} products lack a non-empty code or name`);
+  if (problems.length) {
+    const metadata = { currentPage: p?.currentPage ?? null, pageSize: p?.pageSize ?? null,
+      numberOfPages: p?.numberOfPages ?? null, totalNumberOfResults: p?.totalNumberOfResults ?? null,
+      resultsCount: resultsAreArray ? data.results.length : null };
+    throw new Error(`Unexpected Willys pagination/product response for ${categoryPath ?? 'category'} page ${page}: ${problems.join('; ')}; metadata=${JSON.stringify(metadata)}. Incomplete scan will not be published.`);
   }
 }

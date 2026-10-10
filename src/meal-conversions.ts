@@ -29,6 +29,7 @@ type SourceFood = {
 
 type ConversionAsset = {
   schemaVersion: number;
+  revision: string;
   source: {
     name: string;
     release: string;
@@ -42,12 +43,14 @@ type ConversionAsset = {
 };
 
 const asset = conversionData as ConversionAsset;
+export const amountConversionVersion = asset.revision;
 
 export type ReferenceAmountResult = {
     amount: { unit: "g"; quantity: number };
   evidence: {
     source: string;
     release: string;
+    assetRevision: string;
     fdcId: number;
     description: string;
     mappingMethod: string;
@@ -113,6 +116,7 @@ export function referenceAmount(name: string, unit: string, quantity: number, sc
     evidence: {
       source: asset.source.name,
       release: asset.source.release,
+      assetRevision: asset.revision,
       fdcId,
       description: food.description,
       mappingMethod: food.mappingMethod,

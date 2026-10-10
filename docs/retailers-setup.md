@@ -50,7 +50,7 @@ CLI:n laddar inte `.env` automatiskt. Anslutningsvärden kan laddas med Nodes `-
 
 ## Daglig Coop-uppdatering
 
-`.github/workflows/retailers.yml` är aktiverat för enbart Coop, dagligen 04:50 UTC och vid manuell start; ICA ingår inte. Körningen den 9 oktober verifierade alla 376 godkända huvud- och reserv-ID:n med noll produktändringar, 4 D1-skrivningar och 4 034 läsningar. Databasen var 1 679 360 byte. Workflowet använder `npm ci` för låsta beroenden.
+`wrangler.jsonc` schemalägger Coop-triggern dagligen 04:50 UTC. Workern skickar då `.github/workflows/retailers.yml` via `workflow_dispatch` endast när Coop D1-bindingen är ansluten. Workflowen har ingen egen cron, så uppdateringen har en enda schemakälla; manuell start finns kvar. ICA ingår inte. Körningen den 9 oktober verifierade alla 376 godkända huvud- och reserv-ID:n med noll produktändringar, 4 D1-skrivningar och 4 034 läsningar. Databasen var 1 679 360 byte. Workflowet använder `npm ci` för låsta beroenden.
 
 Före varje uppdatering frågar `scripts/check-retailer-quota.ts` Cloudflares D1-analys efter dagens UTC-skrivningar i hela kontot. Körningen går vidare endast när uppmätt användning + `COOP_WRITE_ALLOWANCE` + `COOP_SHARED_WRITE_RESERVE` högst är `COOP_ACCOUNT_WRITE_LIMIT`. Nuvarande värden är 7 000 för Coop, 10 000 reserverade skrivningar och 90 000 som kontogräns. Coop-budgeten täcker den konservativa uppskattningen 6 413 även om alla 376 produkter, priser och 881 kopplingsstatusar ändras. Saknad/ogiltig kvotdata stoppar körningen; otillräckligt utrymme skjuter upp den. Samma allowance begränsar publiceringen. Willys och receptimport delar fortfarande kvoten; kvotkontrollen reserverar inget åt andra jobb utöver det uttryckliga reservvärdet.
 

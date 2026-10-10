@@ -98,6 +98,38 @@ test('crawler rejects shifted pagination and an incomplete last page', async () 
   await assert.rejects(crawl(fixtureSource([page([raw()], 0, 2, 1), page([raw('TEST_2_ST')], 1, 3, 1)]), '2110', 20, () => {}), /changed/);
   await assert.rejects(crawl(fixtureSource([page([raw()], 0, 2, 1), page([], 1, 2, 1)]), '2110', 20, () => {}), /Missing results/);
 });
+test('crawler retries one malformed source page from category page zero', async () => {
+  let calls = 0;
+  const source = { requests: 0, async initialize() { return store; }, async verifyStore() { return store; },
+    async categories() { return tree; }, async category() {
+      calls++;
+      return calls === 1 ? { ...page([raw()]), pagination: { ...page([raw()]).pagination, currentPage: 7 } } : page([raw()]);
+    } };
+  const result = await crawl(source, '2110', 20, () => {});
+  assert.equal(calls, 2);
+  assert.equal(result.entries.length, 1);
+  assert.equal(result.categories[0].collected, 1);
+});
+test('crawler retries a drifting category once but still refuses incomplete publication', async () => {
+  let calls = 0;
+  const drifting = { requests: 0, async initialize() { return store; }, async verifyStore() { return store; },
+    async categories() { return tree; }, async category(_path: string, number: number) {
+      calls++;
+      // Page zero promises two rows, while page one advertises a different total.
+      return number === 0 ? page([raw()], 0, 2, 1) : page([raw('TEST_2_ST')], 1, 3, 1);
+    } };
+  await assert.rejects(crawl(drifting, '2110', 20, () => {}), /changed during pagination/);
+  assert.equal(calls, 4, 'two pages fetched on each of the two bounded attempts');
+
+  let malformedCalls = 0;
+  const malformed = { requests: 0, async initialize() { return store; }, async verifyStore() { return store; },
+    async categories() { return tree; }, async category() {
+      malformedCalls++;
+      return { ...page([raw()]), pagination: { ...page([raw()]).pagination, currentPage: 8 } };
+    } };
+  await assert.rejects(crawl(malformed, '2110', 20, () => {}), /Unexpected Willys pagination\/product response/);
+  assert.equal(malformedCalls, 2, 'persistent malformed source responses fail closed after one retry');
+});
 test('crawler detects duplicate pages and never silently truncates', async () => {
   await assert.rejects(crawl(fixtureSource([page([raw()], 0, 2, 1), page([raw()], 1, 2, 1)]), '2110', 20, () => {}), /Duplicate/);
   await assert.rejects(crawl(fixtureSource([page([raw(), raw('TEST_2_ST')])]), '2110', 1, () => {}), /budget/);

@@ -10,7 +10,8 @@
   "migrations": [{ "tag": "v1-meal-compute", "new_sqlite_classes": ["MealCompute"] }],
   "triggers": {
     "crons": [
-      "17 4 * * *"
+      "17 4 * * *",
+      "50 4 * * *"
     ]
   },
   "vars": {
