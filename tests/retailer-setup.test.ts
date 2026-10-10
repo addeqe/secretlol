@@ -20,13 +20,15 @@ test('connected config keeps Willys IDs and adds only configured retailer databa
   const temp = tempDir();
   try {
     const input = join(temp.path, 'wrangler.jsonc'), output = join(temp.path, 'connected.json');
-    writeFileSync(input, JSON.stringify({ account_id: 'old', vars: {}, d1_databases: [
+    writeFileSync(input, JSON.stringify({ account_id: 'old', d1_databases: [
       { binding: 'DB', database_name: 'willys-catalog', database_id: 'willys-old', migrations_dir: 'migrations' },
       { binding: 'MEAL_DB', database_name: 'mealplanner-recipes', database_id: 'meal-old', migrations_dir: 'meal-migrations' },
     ] }));
-    const env: NodeJS.ProcessEnv = { ...baseEnv(), COOP_DATABASE_ID: uuid('d') };
+    const env: NodeJS.ProcessEnv = { ...baseEnv(), COOP_DATABASE_ID: uuid('d'), GITHUB_REPOSITORY: 'owner/catalogue' };
     connectedConfig(env, input, output);
     const config = JSON.parse(readFileSync(output, 'utf8'));
+    assert.equal(config.vars.GITHUB_REPOSITORY, env.GITHUB_REPOSITORY);
+    assert.equal(config.vars.RETAILERS_LIVE_ENABLED, 'false');
     assert.equal(config.d1_databases[0].database_id, env.CLOUDFLARE_DATABASE_ID);
     assert.equal(config.d1_databases[1].database_id, env.MEAL_DATABASE_ID);
     assert.deepEqual(config.d1_databases.slice(2), [{ binding: 'COOP_DB', database_name: 'coop-catalog',

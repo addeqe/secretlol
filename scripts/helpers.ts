@@ -65,6 +65,7 @@ export function connectedConfig(env: NodeJS.ProcessEnv = process.env, configPath
     return id;
   };
   const original = JSON.parse(readFileSync(configPath, 'utf8'));
+  original.vars ??= {};
   original.account_id = value('CLOUDFLARE_ACCOUNT_ID');
   original.d1_databases[0].database_id = value('CLOUDFLARE_DATABASE_ID');
   if (original.d1_databases[1]) original.d1_databases[1].database_id = value('MEAL_DATABASE_ID');
