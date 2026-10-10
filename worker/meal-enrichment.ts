@@ -1,5 +1,6 @@
 import {getMealImmutable,setMealImmutable} from './meal-cache.ts';
 import {amountConversionVersion} from '../src/meal-conversions.ts';
+import {isPlanningRecipeEligible,planningQualityPolicyVersion,type PlanningSlot} from '../src/meal-planning-quality.ts';
 
 export type EnrichmentManifest={revision:string;baseDatasetId:string;recipes:number;chunkWidth:number;recipeChunks:number[];ingredientChunks:Record<string,number>;setChunks:Record<string,number>;planningChunks:number[];ingredientNames:string[];definitions?:any[];coverage?:unknown;[key:string]:unknown};
 export type RecipePatch={filters?:any[];profile?:any;source?:Record<string,unknown>};
@@ -7,7 +8,7 @@ export type PlanningVector=[number,number|null,number|null,number|null,number|nu
 export type CandidateProfile={version:1;calories:number;targets:Record<string,{min?:number;max?:number}>;trackedNutrients:string[]};
 // Storage revisions identify immutable chunks; the public revision also pins
 // amount estimates so a conversion correction invalidates client/quote caches.
-export function publicProfileRevision(m:{revision:string}|undefined){return m?`${m.revision}+${amountConversionVersion}`:null;}
+export function publicProfileRevision(m:{revision:string}|undefined){return m?`${m.revision}+${amountConversionVersion}+${planningQualityPolicyVersion}`:null;}
 const nutrientColumns:Record<string,number>={calories:2,fat:3,saturatedFat:4,cholesterol:5,sodium:6,carbohydrates:7,fiber:8,sugar:9,protein:10};
 
 export function parseCandidateProfile(raw:string|null):CandidateProfile|null{
@@ -59,7 +60,7 @@ export async function ingredientPatches(db:D1Database,m:EnrichmentManifest|undef
 }
 
 /** All hard classification and availability constraints precede advisory ranking. */
-export async function rankedRecipeIds(db:D1Database,m:EnrichmentManifest,groups:string[][],brokenNames:string[],q:string,profile:CandidateProfile|null){
+export async function rankedRecipeIds(db:D1Database,m:EnrichmentManifest,groups:string[][],brokenNames:string[],q:string,profile:CandidateProfile|null,planningSlot?:PlanningSlot){
   const wantedKeys=[...new Set(groups.flat())],setChunks=await enrichmentChunks(db,m,'sets',wantedKeys.filter(k=>m.setChunks[k]!==undefined).map(k=>m.setChunks[k]));
   let allowed:Set<number>|null=null;
   for(const group of groups){const union=new Set<number>();for(const key of group){const ids=setChunks.get(m.setChunks[key])?.[key]??[];for(const id of ids)union.add(id);}
@@ -70,6 +71,7 @@ export async function rankedRecipeIds(db:D1Database,m:EnrichmentManifest,groups:
   const scored:Array<{id:number;score:number;density:number;unresolved:number}>=[];
   for(const v of vectors){
     if(allowed&&!allowed.has(v[0])||q&&!v[13].toLowerCase().includes(q)||v[12].some(i=>broken.has(i)))continue;
+    if((profile!==null||planningSlot!==undefined)&&!isPlanningRecipeEligible(v[0],planningSlot))continue;
     if(profile&&(!(v[1]!>0)||!(v[2]!>0)||profile.trackedNutrients.some(k=>typeof v[nutrientColumns[k]]!=='number')))continue;
     let score=0,density=0;
     for(const key of rankedBy){const target=profile!.targets[key],actual=(v[nutrientColumns[key]] as number)/v[2]!*profile!.calories;

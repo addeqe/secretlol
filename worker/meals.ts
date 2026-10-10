@@ -1,5 +1,6 @@
 import {publicProfileRevision,parseCandidateProfile,recipePatches,mergeRecipePatch,mergeSummaryPatch,ingredientPatches,rankedRecipeIds,type EnrichmentManifest} from './meal-enrichment.ts';
 import {ingredientPolicy,productPolicy,DIETARY_POLICY_VERSION} from '../src/dietary-policy.ts';
+import {curatedPlanningRules,parsePlanningSlot,planningQualityPolicyVersion} from '../src/meal-planning-quality.ts';
 import {packInfo} from '../src/product-pack.ts';
 import {calculateLine,aggregateShopping,conversionPolicy,sourcedAmount} from '../src/meal-cost.ts';
 import type {AmountOverride,CostProduct,IngredientAmount} from '../src/meal-cost.ts';
@@ -149,7 +150,7 @@ export async function mealRoutes(request:Request,env:MealEnv,requestJson:(r:Requ
   if(!m||meta.ready!==m.datasetId)return fail('recipe_import_in_progress',503,{statusUrl:'/meal/status'});
   if(route==='/meal/dataset'&&request.method==='GET'){
     const extra=await env.MEAL_DB.prepare("SELECT key,value FROM meal_meta WHERE key IN ('source_metadata','classification_runs','source_counts')").all<{key:string;value:string}>();const audit=Object.fromEntries(extra.results.map(r=>[r.key,JSON.parse(r.value)]));
-    return respond({manifest:JSON.parse(meta.manifest),sourceMetadata:audit.source_metadata,classificationRuns:audit.classification_runs,sourceCounts:audit.source_counts,archiveUrl:`https://github.com/${m.repository}/releases/download/${m.releaseTag}/recipes_with_filters.sqlite.gz`,enrichment:m.enrichment??null,apiVersion:'1',conversionPolicy});}
+    return respond({manifest:JSON.parse(meta.manifest),sourceMetadata:audit.source_metadata,classificationRuns:audit.classification_runs,sourceCounts:audit.source_counts,archiveUrl:`https://github.com/${m.repository}/releases/download/${m.releaseTag}/recipes_with_filters.sqlite.gz`,enrichment:m.enrichment??null,planningQualityPolicy:{version:planningQualityPolicyVersion,records:curatedPlanningRules},apiVersion:'1',conversionPolicy});}
   if(route==='/meal/filters'&&request.method==='GET')return respond({datasetId:m.datasetId,definitions:await filterDefinitions(env,m),coverage:m.enrichment?.coverage??null,states:['yes','no','unknown'],strictUnknownsExcluded:true});
   if(route==='/meal/quote'){
     if(request.method!=='POST')return fail('method_not_allowed',405);
@@ -206,7 +207,9 @@ export async function mealRoutes(request:Request,env:MealEnv,requestJson:(r:Requ
     }
     if(groups.length>20)return fail('too_many_filter_groups');
     const candidateProfile=parseCandidateProfile(u.searchParams.get('candidateProfile'));
-    const availableOnly=u.searchParams.get('availableOnly')!=='false',criteria=JSON.stringify({q,groups,availableOnly,...(alternative?{retailer:alternative}:{}),...(m.enrichment?{profileRevision:revision,candidateProfile}:{})});
+    const rawPlanningSlot=u.searchParams.get('planningSlot'),planningSlot=parsePlanningSlot(rawPlanningSlot);
+    if(rawPlanningSlot!==null&&planningSlot===null)return fail('invalid_planning_slot',400,{parameter:'planningSlot',allowed:['breakfast','lunch','dinner','snack','dessert']});
+    const availableOnly=u.searchParams.get('availableOnly')!=='false',criteria=JSON.stringify({q,groups,availableOnly,...(alternative?{retailer:alternative}:{}),...(m.enrichment?{profileRevision:revision,candidateProfile,planningSlot}:{})});
     const retailVersion=alternative?await retailerAvailability(env,m,alternative):null;
     const version=retailVersion?{current:retailVersion.current,
       snapshot:retailVersion.scope?{id:retailVersion.runId!,store_id:retailVersion.scope.storeId}:null,
@@ -223,7 +226,7 @@ export async function mealRoutes(request:Request,env:MealEnv,requestJson:(r:Requ
     if(m.enrichment){
       let offset=0;const cursor=u.searchParams.get('cursor');
       if(cursor){const value=decode(cursor);if(!Array.isArray(value)||value.length!==4||value[0]!==m.datasetId||!Number.isSafeInteger(value[1])||value[1]<0||value[2]!==criteria||availableOnly&&value[3]!==version.run?.id)return fail('cursor_filter_or_dataset_mismatch',409);offset=value[1];}
-      const ranked=await rankedRecipeIds(env.MEAL_DB,m.enrichment,groups,brokenNames,q,candidateProfile),ids=ranked.ids.slice(offset,offset+limit);
+      const ranked=await rankedRecipeIds(env.MEAL_DB,m.enrichment,groups,brokenNames,q,candidateProfile,planningSlot??undefined),ids=ranked.ids.slice(offset,offset+limit);
       const result=ids.length?await env.MEAL_DB.prepare('SELECT recipe_id,summary_json FROM meal_recipes WHERE dataset_id=? AND recipe_id IN (SELECT value FROM json_each(?))').bind(m.datasetId,JSON.stringify(ids)).all<{recipe_id:number;summary_json:string}>():{results:[]};
       const patches=await recipePatches(env.MEAL_DB,m.enrichment,ids),byId=new Map(result.results.map(r=>[r.recipe_id,mergeSummaryPatch(JSON.parse(r.summary_json),patches.get(r.recipe_id))]));
       if(byId.size!==ids.length)throw new Error('enrichment_recipe_missing');

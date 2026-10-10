@@ -4,7 +4,7 @@ The recipe archive remains immutable. A reviewed enrichment release adds classif
 
 An enrichment is uploaded into bounded JSON chunks in `meal_enrichment_chunks`. Uploads verify source and chunk checksums, unchanged inventory, expected records, shared daily write headroom and database size. Only the final metadata transaction activates a complete revision. Failed or partial uploads leave the previous revision serving requests. No classification work or enrichment writes run on daily catalogue refreshes.
 
-Every enriched response reports `profileRevision`, combining the immutable classification revision with the deterministic USDA conversion-asset revision. The stored enrichment revision still identifies its chunks. A correction to reference amounts invalidates client and quote caches without duplicating the recipe dataset. Clients must pin that value with `datasetId`, connection run and catalogue version throughout candidate selection and final pricing. Cursor criteria include the revision; a cursor from another revision returns 409. Retail quote caches include the revision. A rollback changes the enrichment metadata pointer to a previously verified revision; recipe archives and retailer connections remain intact.
+Every enriched response reports `profileRevision`, combining the immutable classification revision, deterministic USDA conversion-asset revision and curated planning-quality policy version. The stored enrichment revision still identifies its chunks. A correction to reference amounts or planning exclusions invalidates client and quote caches without duplicating the recipe dataset. Clients must pin that value with `datasetId`, connection run and catalogue version throughout candidate selection and final pricing. Cursor criteria include the revision; a cursor from another revision returns 409. Retail quote caches include the revision. A rollback changes the enrichment metadata pointer to a previously verified revision; recipe archives and retailer connections remain intact.
 
 ## Candidate search
 
@@ -32,6 +32,8 @@ Household ranking normalizes each member's target by that member's energy requir
 The app considers nutrient fit before simple ingredient count. New ranked responses need only one bounded summary page per meal slot; legacy API responses retain bounded pagination. Quotes remain bounded to 32 recipes and 400 distinct ingredient names per request. The candidate window and final weekly selection retain explicit resource limits, with diagnostics when the search window is exhausted.
 
 Daily portions are optimized across meals for each member, and always stay between 0.15 and 5 base servings. Final daily nutrition, ingredient quantities, package costs, freshness and profile versions are validated again before a plan is marked ready. A plan with unresolved targets remains explicitly incomplete.
+
+Candidate requests include `planningSlot`. A narrow policy excludes one confirmed test record from planning and five reviewed component/snack recipes from lunch and dinner mains. Other source tags and raw archive searches remain available. `/meal/dataset` exposes the exact IDs, excluded slots and source evidence in `planningQualityPolicy`. These six reviewed records do not constitute a quality audit of the entire corpus.
 
 ## Reference amount estimates
 
