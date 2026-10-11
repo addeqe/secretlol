@@ -15,7 +15,7 @@ on:
         type: boolean
         default: false
       allow_outside_window:
-        description: Manual run only; bypass the default window but still honor Visit-time in Willys robots.txt
+        description: Manual run only; bypass Visit-time/default hours but keep crawl delay, disallow rules and run budgets
         required: false
         type: boolean
         default: false

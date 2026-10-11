@@ -505,10 +505,18 @@ test('manual off-hours override bypasses the default window when robots.txt has 
   assert.equal(client.requests, 1);
 });
 
-test('manual off-hours override still honors an explicit Visit-time from robots.txt', async () => {
+test('manual off-hours override bypasses robots Visit-time but preserves robots disallow rules', async () => {
   let now = Date.parse('2026-10-08T09:00:00Z');
+  const fetched: string[] = [];
   const client = new WillysClient({ manualOutsideWindow: true, now: () => now, wait: async ms => { now += ms; },
-    fetcher: async () => new Response('User-agent: *\nVisit-time: 0400-0845\n') });
-  await assert.rejects(client.initialize('2110'), /Outside Willys crawl window/);
-  assert.equal(client.requests, 1);
+    fetcher: async url => {
+      const path = new URL(String(url)).pathname; fetched.push(path);
+      if (path === '/robots.txt') return new Response('User-agent: *\nVisit-time: 0400-0845\nDisallow: /private\n');
+      if (path === '/axfood/rest/csrf-token') return Response.json('csrf-token');
+      if (path === '/axfood/rest/v2/store/active') return Response.json({ storeId: '2110', name: 'Test store', onlineStore: true });
+      return Response.json({});
+    } });
+  assert.deepEqual(await client.initialize('2110'), { storeId: '2110', name: 'Test store', onlineStore: true });
+  await assert.rejects(client.request('/private/data'), /robots.txt disallows/);
+  assert.deepEqual(fetched, ['/robots.txt', '/api/config', '/axfood/rest/csrf-token', '/axfood/rest/v2/store/activate', '/axfood/rest/v2/store/active']);
 });
