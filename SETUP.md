@@ -51,7 +51,7 @@ For a personal repository, `GITHUB_ACCOUNT` and the owner in `GITHUB_REPOSITORY`
 
 GitHub Actions runs the Willys refresh daily at **04:17 UTC**: 06:17 in Stockholm during summer time, 05:17 during winter time. The Cloudflare Worker keeps its separate Coop trigger at 04:50 UTC.
 
-You can wait for the next scheduled morning, or open your repository's **Actions → Refresh Willys catalogue → Run workflow** during the **04:00–08:45 UTC** crawler window, leaving enough time for the scan to finish. Leave **connection_check** unchecked to collect products. The job refuses to crawl outside that window. It can take tens of minutes because it follows Willys' request pacing.
+You can wait for the next scheduled morning, or open your repository's **Actions → Refresh Willys catalogue → Run workflow**. Leave **connection_check** unchecked to collect products. Manual runs have an **allow_outside_window** option for the default **04:00–08:45 UTC** window; it is off by default, and any explicit **Visit-time** policy in Willys' `robots.txt` remains enforced. A scan can take tens of minutes because it follows Willys' request pacing.
 
 Then run:
 

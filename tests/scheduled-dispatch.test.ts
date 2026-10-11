@@ -14,6 +14,8 @@ test('GitHub schedules Willys directly and Cloudflare only schedules Coop', () =
   const syncWorkflow = readFileSync(new URL('../.github/workflows/sync.yml', import.meta.url), 'utf8');
   assert.match(syncWorkflow, /schedule:\n\s+- cron: '17 4 \* \* \*'/);
   assert.match(syncWorkflow, /workflow_dispatch:/);
+  assert.match(syncWorkflow, /allow_outside_window:/);
+  assert.match(syncWorkflow, /WILLYS_MANUAL_OUTSIDE_WINDOW:\s*\$\{\{ inputs\.allow_outside_window \}\}/);
   const workflow = readFileSync(new URL('../.github/workflows/retailers.yml', import.meta.url), 'utf8');
   assert.match(workflow, /workflow_dispatch:/);
   assert.doesNotMatch(workflow, /^\s+schedule:/m, 'Cloudflare is the only Coop scheduler');

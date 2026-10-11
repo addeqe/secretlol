@@ -22,13 +22,16 @@ export class WillysClient {
   private maxMinutes: number;
   private now: () => number;
   private wait: (ms: number) => Promise<unknown>;
+  private manualOutsideWindow: boolean;
+  private robotsVisitTime = false;
   constructor(options: { fetcher?: typeof fetch; maxRequests?: number; maxMinutes?: number;
-    now?: () => number; wait?: (ms: number) => Promise<unknown> } = {}) {
+    now?: () => number; wait?: (ms: number) => Promise<unknown>; manualOutsideWindow?: boolean } = {}) {
     this.fetcher = options.fetcher ?? fetch;
     this.maxRequests = options.maxRequests ?? 300;
     this.maxMinutes = options.maxMinutes ?? 55;
     this.now = options.now ?? Date.now;
     this.wait = options.wait ?? sleep;
+    this.manualOutsideWindow = options.manualOutsideWindow ?? false;
     this.started = this.now();
   }
   async request(path: string, method = 'GET', text = false): Promise<any> {
@@ -37,7 +40,8 @@ export class WillysClient {
     if (this.disallowed.some(p => url.pathname.startsWith(p))) throw new Error(`robots.txt disallows ${url.pathname}`);
     for (let attempt = 0; attempt < 3; attempt++) {
       await this.wait(Math.max(0, this.lastRequest + this.delayMs - this.now()));
-      if (!inVisitWindow(new Date(this.now()), this.windowStart, this.windowEnd)) {
+      if (!inVisitWindow(new Date(this.now()), this.windowStart, this.windowEnd)
+        && !(this.manualOutsideWindow && !this.robotsVisitTime)) {
         throw new Error('Outside Willys crawl window (default 04:00–08:45 UTC). Run the scheduled workflow tomorrow.');
       }
       if (this.requests >= this.maxRequests || this.now() - this.started > this.maxMinutes * 60000) {
@@ -83,7 +87,11 @@ export class WillysClient {
     const delay = /Crawl-delay:\s*(\d+(?:\.\d+)?)/i.exec(robots);
     if (delay) this.delayMs = Math.max(10000, Number(delay[1]) * 1000);
     const visit = /Visit-time:\s*(\d{2})(\d{2})-(\d{2})(\d{2})/i.exec(robots);
-    if (visit) { this.windowStart = Number(visit[1]) * 60 + Number(visit[2]); this.windowEnd = Number(visit[3]) * 60 + Number(visit[4]); }
+    if (visit) {
+      this.robotsVisitTime = true;
+      this.windowStart = Number(visit[1]) * 60 + Number(visit[2]);
+      this.windowEnd = Number(visit[3]) * 60 + Number(visit[4]);
+    }
     this.disallowed = [...robots.matchAll(/^Disallow:\s*(\/[^\s#]*)/gim)].map(m => m[1]);
     await this.request('/api/config');
     const token = await this.request('/axfood/rest/csrf-token');

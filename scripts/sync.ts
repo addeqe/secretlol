@@ -13,7 +13,8 @@ const args = process.argv.slice(2);
 const argument = (flag: string) => args.includes(flag) ? args[args.indexOf(flag) + 1] : undefined;
 let local: LocalDatabase | undefined;
 try {
-  const source = new WillysClient({ maxRequests: integer('MAX_WILLYS_REQUESTS', 300, 10, 2000), maxMinutes: integer('MAX_RUN_MINUTES', 55, 1, 55) });
+  const source = new WillysClient({ maxRequests: integer('MAX_WILLYS_REQUESTS', 300, 10, 2000), maxMinutes: integer('MAX_RUN_MINUTES', 55, 1, 55),
+    manualOutsideWindow: process.env.WILLYS_MANUAL_OUTSIDE_WINDOW === 'true' });
   if (args.includes('--stores')) {
     await source.initialize(storeId());
     const stores = await source.stores();

@@ -495,3 +495,20 @@ test('body retries still obey the retailer visit window and request budget', asy
     assert.equal(client.requests, 1);
   }
 });
+
+test('manual off-hours override bypasses the default window when robots.txt has no Visit-time', async () => {
+  let now = Date.parse('2026-10-08T09:00:00Z');
+  const client = new WillysClient({ manualOutsideWindow: true, now: () => now, wait: async ms => { now += ms; },
+    fetcher: async () => Response.json(page([raw()])) });
+  const result = await client.category('mejeri-ost-och-agg');
+  assert.equal(result.results.length, 1);
+  assert.equal(client.requests, 1);
+});
+
+test('manual off-hours override still honors an explicit Visit-time from robots.txt', async () => {
+  let now = Date.parse('2026-10-08T09:00:00Z');
+  const client = new WillysClient({ manualOutsideWindow: true, now: () => now, wait: async ms => { now += ms; },
+    fetcher: async () => new Response('User-agent: *\nVisit-time: 0400-0845\n') });
+  await assert.rejects(client.initialize('2110'), /Outside Willys crawl window/);
+  assert.equal(client.requests, 1);
+});
