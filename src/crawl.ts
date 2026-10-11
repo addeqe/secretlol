@@ -30,8 +30,10 @@ export async function crawl(source: Source, storeId: string, maxProducts = 20000
       try {
         const first = await source.category(path, 0);
         expected = first.pagination.totalNumberOfResults;
-        pages = first.pagination.numberOfPages;
         const size = first.pagination.pageSize;
+        // Willys sometimes over-reports numberOfPages at an exact page boundary.
+        // Derive the request count from the total, then verify every returned row.
+        pages = Math.max(1, Math.ceil(expected / size));
         const codes = new Set<string>();
         const categoryEntries = new Map<string, Entry>();
         let newProductCount = 0;
@@ -40,7 +42,7 @@ export async function crawl(source: Source, storeId: string, maxProducts = 20000
           if (data.pagination.currentPage !== page) {
             throw new Error(`Unexpected Willys pagination/product response for ${path}, page ${page}.`);
           }
-          if (data.pagination.totalNumberOfResults !== expected || data.pagination.numberOfPages !== pages || data.pagination.pageSize !== size) {
+          if (data.pagination.totalNumberOfResults !== expected || data.pagination.pageSize !== size) {
             throw new Error(`Category ${path} changed during pagination.`);
           }
           const expectedPageCount = Math.min(size, Math.max(0, expected - page * size));

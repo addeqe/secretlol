@@ -1,5 +1,7 @@
 name: Refresh Willys catalogue
 on:
+  schedule:
+    - cron: '17 4 * * *'
   workflow_dispatch:
     inputs:
       connection_check:

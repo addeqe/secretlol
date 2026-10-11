@@ -8,25 +8,25 @@ const baseEnv = (): Env => ({ DB: {} as D1Database, MEAL_DB: {} as D1Database, C
   GITHUB_REPOSITORY: 'example/catalog', GITHUB_DISPATCH_TOKEN: 'dispatch-test-token' });
 const event = (cron: string) => ({ cron } as ScheduledEvent);
 
-test('Cloudflare cron schedules Willys and Coop once at their configured times', () => {
+test('GitHub schedules Willys directly and Cloudflare only schedules Coop', () => {
   const config = JSON.parse(readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8'));
-  assert.deepEqual(config.triggers.crons, ['17 4 * * *', '50 4 * * *']);
+  assert.deepEqual(config.triggers.crons, ['50 4 * * *']);
+  const syncWorkflow = readFileSync(new URL('../.github/workflows/sync.yml', import.meta.url), 'utf8');
+  assert.match(syncWorkflow, /schedule:\n\s+- cron: '17 4 \* \* \*'/);
+  assert.match(syncWorkflow, /workflow_dispatch:/);
   const workflow = readFileSync(new URL('../.github/workflows/retailers.yml', import.meta.url), 'utf8');
   assert.match(workflow, /workflow_dispatch:/);
   assert.doesNotMatch(workflow, /^\s+schedule:/m, 'Cloudflare is the only Coop scheduler');
 });
 
-test('Willys cron dispatches sync workflow while the legacy missing-cron event stays compatible', async () => {
+test('retired Willys Cloudflare cron and missing-cron events are ignored', async () => {
   const original = globalThis.fetch;
   const paths: string[] = [];
   try {
     globalThis.fetch = async (url) => { paths.push(String(url)); return new Response(null, { status: 204 }); };
     await worker.scheduled(event('17 4 * * *'), baseEnv());
     await worker.scheduled({} as ScheduledEvent, baseEnv());
-    assert.deepEqual(paths, [
-      'https://api.github.com/repos/example/catalog/actions/workflows/sync.yml/dispatches',
-      'https://api.github.com/repos/example/catalog/actions/workflows/sync.yml/dispatches',
-    ]);
+    assert.deepEqual(paths, []);
   } finally { globalThis.fetch = original; }
 });
 

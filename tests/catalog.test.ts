@@ -131,6 +131,19 @@ test('crawler retries a drifting category once but still refuses incomplete publ
   await assert.rejects(crawl(malformed, '2110', 20, () => {}), /Unexpected Willys pagination\/product response/);
   assert.equal(malformedCalls, 2, 'persistent malformed source responses fail closed after one retry');
 });
+test('crawler derives page count from total results and tolerates a Willys over-reported page count', async () => {
+  const products = [raw('TEST_1_ST'), raw('TEST_2_ST'), raw('TEST_3_ST'), raw('TEST_4_ST')];
+  const source = { requests: 0, async initialize() { return store; }, async verifyStore() { return store; },
+    async categories() { return tree; }, async category(_path: string, number: number) {
+      if (number > 1) throw new Error('The crawler requested the phantom seventh page');
+      const result = page(products.slice(number * 2, number * 2 + 2), number, 4, 2);
+      return { ...result, pagination: { ...result.pagination, numberOfPages: 3 } };
+    } };
+  const result = await crawl(source, '2110', 20, () => {});
+  assert.equal(result.entries.length, 4);
+  assert.equal(result.categories[0].pages, 2);
+  assert.equal(result.categories[0].collected, 4);
+});
 test('crawler detects duplicate pages and never silently truncates', async () => {
   await assert.rejects(crawl(fixtureSource([page([raw()], 0, 2, 1), page([raw()], 1, 2, 1)]), '2110', 20, () => {}), /Duplicate/);
   await assert.rejects(crawl(fixtureSource([page([raw(), raw('TEST_2_ST')])]), '2110', 1, () => {}), /budget/);
@@ -142,6 +155,9 @@ test('products repeated across categories are deduplicated with both categories'
 });
 test('pagination boundary validates the real response contract', () => {
   assert.doesNotThrow(() => validatePage(page([raw()]), 0));
+  const overReported = page([raw('TEST_1_ST'), raw('TEST_2_ST')], 0, 4, 2);
+  assert.doesNotThrow(() => validatePage({ ...overReported,
+    pagination: { ...overReported.pagination, numberOfPages: 3 } }, 0));
   assert.throws(() => validatePage({ ...page([raw()]), pagination: { currentPage: 1 } }, 0));
 });
 test('initial publication and subsequent changes create compact history', async () => {
@@ -420,21 +436,13 @@ test('D1 REST client handles response metadata without printing credentials', as
   await client.query('SELECT ?', ['hello']);
   assert.equal(client.rowsWritten, 2); assert.equal(client.sizeBytes, 20); assert.deepEqual(JSON.parse(String(captured?.body)).params, ['hello']);
 });
-test('unconnected cron fails visibly instead of silently skipping daily updates', async () => {
-  await assert.rejects(worker.scheduled({} as ScheduledEvent, { DB: {} as D1Database, CATALOG_API_TOKEN: secret }), /not connected/);
-});
-test('connected cron dispatches the full scan and reports rejected credentials', async () => {
+test('retired Willys Worker cron never dispatches a catalogue scan', async () => {
   const original = globalThis.fetch;
-  const env = { DB: {} as D1Database, CATALOG_API_TOKEN: secret, GITHUB_REPOSITORY: 'example/catalog', GITHUB_DISPATCH_TOKEN: 'test-only' };
+  const env = { DB: {} as D1Database, CATALOG_API_TOKEN: secret };
   try {
-    globalThis.fetch = async (url, options) => {
-      assert.equal(String(url), 'https://api.github.com/repos/example/catalog/actions/workflows/sync.yml/dispatches');
-      assert.equal(options?.method, 'POST'); assert.deepEqual(JSON.parse(String(options?.body)), { ref: 'main' });
-      return new Response(null, { status: 204 });
-    };
+    globalThis.fetch = async () => { throw new Error('Willys is scheduled by GitHub Actions now'); };
     await worker.scheduled({} as ScheduledEvent, env);
-    globalThis.fetch = async () => new Response(null, { status: 401 });
-    await assert.rejects(worker.scheduled({} as ScheduledEvent, env), /HTTP 401/);
+    await worker.scheduled({ cron: '17 4 * * *' } as ScheduledEvent, env);
   } finally { globalThis.fetch = original; }
 });
 test('first-time Cloudflare address setup recognizes an unregistered subdomain', async () => {

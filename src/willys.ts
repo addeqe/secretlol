@@ -121,8 +121,6 @@ export function validatePage(data: any, page: number, categoryPath?: string): as
     if (p.currentPage !== page) problems.push('currentPage differs from request');
     if (p.pageSize < 1 || p.pageSize > 100) problems.push('pageSize is outside 1..100');
     if (p.numberOfPages < 0 || p.totalNumberOfResults < 0) problems.push('negative page or result count');
-    if (Number.isSafeInteger(p.pageSize) && p.pageSize > 0 && Number.isSafeInteger(p.numberOfPages) && Number.isSafeInteger(p.totalNumberOfResults)
-      && p.numberOfPages !== Math.ceil(p.totalNumberOfResults / p.pageSize)) problems.push('numberOfPages does not match totalNumberOfResults/pageSize');
   }
   if (invalidProducts) problems.push(`${invalidProducts} products lack a non-empty code or name`);
   if (problems.length) {
