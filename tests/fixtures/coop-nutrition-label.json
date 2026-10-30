@@ -1,0 +1,116 @@
+{
+  "id": "7300156587121",
+  "name": "Havredryck Till Kaffe",
+  "nutrientLinks": [
+    {
+      "amount": [
+        "60"
+      ],
+      "description": "Energi",
+      "unit": "Kilokalori"
+    },
+    {
+      "amount": [
+        "253"
+      ],
+      "description": "Energi",
+      "unit": "Kilojoule"
+    },
+    {
+      "amount": [
+        "2.8"
+      ],
+      "description": "Fett",
+      "unit": "Gram"
+    },
+    {
+      "amount": [
+        "0.2"
+      ],
+      "description": "Varav mättat fett",
+      "unit": "Gram"
+    },
+    {
+      "amount": [
+        "7.8"
+      ],
+      "description": "Kolhydrat",
+      "unit": "Gram"
+    },
+    {
+      "amount": [
+        "3.5"
+      ],
+      "description": "Varav sockerarter",
+      "unit": "Gram"
+    },
+    {
+      "amount": [
+        "1.0"
+      ],
+      "description": "Protein",
+      "unit": "Gram"
+    },
+    {
+      "amount": [
+        "0.10"
+      ],
+      "description": "Salt",
+      "unit": "Gram"
+    },
+    {
+      "amount": [
+        "1"
+      ],
+      "description": "Vitamin D",
+      "unit": "Mikrogram",
+      "percentageOfDailyIntake": "20"
+    },
+    {
+      "amount": [
+        "0.21"
+      ],
+      "description": "Riboflavin",
+      "unit": "Milligram",
+      "percentageOfDailyIntake": "15"
+    },
+    {
+      "amount": [
+        "0.38"
+      ],
+      "description": "Vitamin B12",
+      "unit": "Mikrogram",
+      "percentageOfDailyIntake": "15"
+    },
+    {
+      "amount": [
+        "120"
+      ],
+      "description": "Kalcium",
+      "unit": "Milligram",
+      "percentageOfDailyIntake": "15"
+    }
+  ],
+  "nutrientInformation": [
+    {
+      "header": {
+        "nutrientBasisQuantity": 100,
+        "nutrientBasisQuantityType": "BY_MEASURE",
+        "nutrientBasisQuantityUnit": {
+          "code": "MLT",
+          "value": "Milliliter"
+        }
+      }
+    }
+  ],
+  "nutrientBasis": {
+    "quantity": 100
+  },
+  "_provenance": {
+    "retailer": "coop",
+    "archivedSourceFile": "data/research/retailers/coop-product-by-id.json",
+    "sourceRecordPath": "results.items[0]",
+    "observedAt": null,
+    "notes": "Reduced captured record. Original nutrient fields and values retained; capture timestamp is not present in the archived response."
+  }
+}

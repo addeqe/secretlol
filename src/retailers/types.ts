@@ -10,9 +10,25 @@ export type RetailStore = { retailer: RetailerId; id: string; name: string;
   pricingStoreId?: string };
 export type RetailCategory = { id: string; name: string; children: RetailCategory[] };
 export type RetailPack = { quantity: number; unit: QuantityUnit; approximate: boolean; drainedGrams?: number | null };
+export type NutritionSourceJson = null | boolean | string | number | readonly NutritionSourceJson[]
+  | { readonly [key: string]: NutritionSourceJson };
+export type ProductNutritionSource = {
+  readonly schemaVersion: 1;
+  readonly retailer: RetailerId;
+  readonly productId: string;
+  /** SHA-256 of canonical sourcePayload only; prices and observation times are excluded. */
+  readonly contentHash: string;
+  readonly sourcePayload: {
+    readonly nutrientLinks?: NutritionSourceJson;
+    readonly nutrientInformation?: NutritionSourceJson;
+    readonly nutrientBasis?: NutritionSourceJson;
+  };
+};
 export type RetailProduct = { id: string; ean: string | null; name: string; brand: string | null;
   categories: string[]; pack: RetailPack | null; ingredientsText: string | null;
-  url?: string; imageUrl?: string };
+  url?: string; imageUrl?: string;
+  /** Optional raw label evidence; absent means unknown, including legacy or safely omitted input. */
+  nutritionSource?: ProductNutritionSource };
 export type RetailPrice = { amountOre: number; basis: 'pack' | 'kg' | 'l';
   depositOre: number | null; memberOnly: boolean; minimumQuantity: number | null;
   validFrom: string | null; validUntil: string | null };

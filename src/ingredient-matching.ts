@@ -30,6 +30,9 @@ const prep = /\b(?:finely|coarsely|freshly|chopped|diced|minced|sliced|grated|sh
 export function ingredientId(name: string) { return 'ing_' + createHash('sha256').update(name).digest('hex').slice(0,24); }
 export function reviewAttributeExclusion(name:string,entry:Entry):string|null {
   const request=normalizeText(name),title=normalizeText(entry.name),cats=entry.categories.map(normalizeText);
+  if(/\b(?:almonds?|walnuts?|pecans?|hazelnuts?|cashews?|peanuts?|pine nuts?|pistachios?)\b/.test(request)&&
+      !/\b(?:milk|flour|butter|oil|extract|mix|assorted)\b/.test(request)&&
+      /mix|honung|yoghurt|choklad|chili|(?:^| )saltad(?:e)?\b/.test(title))return 'plain_nut_mixture_or_coating_incompatible';
   const checks:Array<[boolean,boolean,string]>=[
     [/\borganic\b/.test(request),/\beko\b|ekologisk/.test(title),'organic_not_verified'],
     [/\bgluten free\b|\bglutenfree\b/.test(request),/glutenfri/.test(title+' '+cats.join(' ')),'gluten_free_not_verified'],
@@ -59,9 +62,12 @@ export function reviewAttributeExclusion(name:string,entry:Entry):string|null {
     [/\bcanned\b/.test(request)&&/\b(?:beans?|cannellini)\b/.test(request),packInfo(entry).drainedGrams!==null||/konserv|kokt|fardigkokt/.test(title),'preserved_beans_not_verified'],
     [/\b(?:dry|dried)\b/.test(request)&&/\bbeans?\b/.test(request),packInfo(entry).drainedGrams===null&&!/konserv|kokt|fardigkokt/.test(title),'dry_beans_incompatible'],
     [/\bteabags?\b/.test(request),/tepase|tepasar|tea bags?/.test(title),'tea_bag_form_not_verified'],
-    [/\bflour\b/.test(request),/mjol|flour|starkelse/.test(title),'flour_identity_not_verified'],
+    [/\bflour\b/.test(request)&&! /\b(?:tortillas?|wraps?)\b/.test(request),/mjol|flour|starkelse/.test(title),'flour_identity_not_verified'],
+    [/\b(?:flour|wheat) tortillas?\b/.test(request),/tortilla|wrap/.test(title)&&!/majs|corn/.test(title),'wheat_tortilla_identity_not_verified'],
     [/\bmedium(?: hot)? salsa\b/.test(request),/\bmedium\b/.test(title),'medium_salsa_not_verified'],
     [/\bdry roasted\b/.test(request),/torrrost|dry roasted/.test(title),'dry_roasting_not_verified'],
+    [/\b(?:ground ginger|ginger powder)\b/.test(request),/^ingefara malen\b/.test(title),'ground_ginger_form_not_verified'],
+    [/\bwhole almonds\b/.test(request),! /span|skivad|hackad|mjol|massa|smor|dryck/.test(title),'whole_almond_form_not_verified'],
   ];
   for(const [required,verified,reason] of checks)if(required&&!verified)return reason;
   const requested=/(\d+(?:\.\d+)?)%/.exec(request);
@@ -121,8 +127,10 @@ function classify(name: string): Classified|null {
   return {rule,uncertain,reason,constraints};
 }
 export function buildLinks(requirements: Requirement[], products: Entry[], reviews: Record<string,Decision>={}, now=Date.now(),assessments:Record<string,Assessment>={}):Link[]{
-  if(!requirements.length || new Set(requirements.map(r=>r.name)).size!==requirements.length ||
-    requirements.some(r=>!r.name.trim() || !Number.isSafeInteger(r.occurrences) || r.occurrences<1))throw new Error('Invalid ingredient inventory');
+  return createIngredientMatcher(products,reviews,now,assessments)(requirements);
+}
+/** Build product pools once for streaming, local dataset ingestion. */
+export function createIngredientMatcher(products:Entry[],reviews:Record<string,Decision>={},now=Date.now(),assessments:Record<string,Assessment>={}){
   if(new Set(products.map(p=>p.code)).size!==products.length)throw new Error('Duplicate catalogue products');
   const byCode=new Map(products.map(p=>[p.code,p]));
   const byIdentity=new Map<string,Entry[]>();
@@ -134,6 +142,9 @@ export function buildLinks(requirements: Requirement[], products: Entry[], revie
     pools.set(rule.id,products.filter(p=>p.categories.some(c=>rule.categories.some(prefix=>normalizeText(c).startsWith(prefix))) &&
       title.test(normalizeText(p.name)) && (!exclude || !exclude.test(normalizeText(p.name)))));
   }
+  return (requirements:Requirement[]):Link[]=>{
+  if(!requirements.length || new Set(requirements.map(r=>r.name)).size!==requirements.length ||
+    requirements.some(r=>!r.name.trim() || !Number.isSafeInteger(r.occurrences) || r.occurrences<1))throw new Error('Invalid ingredient inventory');
   return requirements.map(requirement=>{
     const name=normalizeText(requirement.name), parsed=classify(requirement.name), policy=ingredientPolicy(requirement.name);
     const base:Link={...requirement,ingredientId:ingredientId(requirement.name),foodId:parsed?.rule.id??null,
@@ -188,6 +199,7 @@ export function buildLinks(requirements: Requirement[], products: Entry[], revie
     return {...base,review,status:!parsed||parsed.uncertain?'needs_review':'unavailable',candidates:candidates.slice(0,8),
       reason:!parsed||parsed.uncertain?reason:pool.length?'No compatible product has an available, fresh comparable price':'No compatible product exists in this store catalogue'};
   });
+  };
 }
 export function summarizeLinks(links:Link[]){
   const names:Record<string,number>={}, occurrences:Record<string,number>={};

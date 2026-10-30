@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { validateObservation } from './identity.ts';
+import { copyNutritionSource } from './nutrition-source.ts';
 import type { RetailClient, RetailPage, StoreScope } from './types.ts';
 import { scopeKey, validateScope } from './types.ts';
 
@@ -52,6 +53,11 @@ function normalizedPage(page: RetailPage): RetailPage {
         ingredientsText: observation.product.ingredientsText,
         ...(observation.product.url !== undefined ? { url: observation.product.url } : {}),
         ...(observation.product.imageUrl !== undefined ? { imageUrl: observation.product.imageUrl } : {}),
+        ...(() => {
+          const nutritionSource = copyNutritionSource(observation.product.nutritionSource,
+            observation.retailer, observation.product.id);
+          return nutritionSource ? { nutritionSource } : {};
+        })(),
       },
       price: observation.price ? { ...observation.price } : null,
       availability: observation.availability,

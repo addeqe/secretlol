@@ -1,4 +1,5 @@
 import { calendarWeekEnd } from '../price-freshness.ts';
+import { captureNutritionSource } from './nutrition-source.ts';
 import {
   RetailerUnsupportedError,
   postalCode as validatePostalCode,
@@ -276,6 +277,7 @@ function parseCoopProductValidated(
   const drainedGrams=positiveNumber(raw.drainedWeightGrams)??(drained?.unit==='g'?drained.quantity:null);
   if(pack&&drainedGrams!==null)pack.drainedGrams=drainedGrams;
   const url=firstString(raw,['url','productUrl']),imageUrl=firstString(raw,['imageUrl','image']);
+  const nutritionSource = captureNutritionSource('coop', id, raw);
   const product: RetailProduct = {
     id,
     ean,
@@ -286,6 +288,7 @@ function parseCoopProductValidated(
     ingredientsText: firstString(raw, ['listOfIngredients', 'ingredientsText', 'ingredients']),
     ...(url ? { url } : {}),
     ...(imageUrl ? { imageUrl } : {}),
+    ...(nutritionSource ? { nutritionSource } : {}),
   };
 
   const checked = checkedAt.toISOString();
