@@ -1,4 +1,4 @@
-import { authorized, handle as serviceHandle, type Env as ServiceEnv } from './service.ts';
+import { accessError, handle as serviceHandle, type Env as ServiceEnv } from './service.ts';
 import { computeShard } from './compute-shard.ts';
 import { requestFailure } from './http-errors.ts';
 export { expiresAt, packPrice } from './service.ts';
@@ -12,10 +12,8 @@ const json = (value: unknown, status = 200) => Response.json(value, { status, he
 export async function handle(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   if (url.pathname === '/health' && request.method === 'GET') return json({service:'willys-catalog',ok:true});
-  if (!env.CATALOG_API_TOKEN || env.CATALOG_API_TOKEN.length < 32) return json({error:'service_not_connected'},503);
-  const reviewRoute = ['/ingredients/review','/ingredients/refresh'].includes(url.pathname);
-  if (reviewRoute && (!env.INGREDIENT_REVIEW_TOKEN || env.INGREDIENT_REVIEW_TOKEN.length < 32)) return json({error:'review_not_connected'},503);
-  if (!authorized(request,reviewRoute ? env.INGREDIENT_REVIEW_TOKEN! : env.CATALOG_API_TOKEN)) return json({error:'unauthorized'},401);
+  const denied = accessError(request, env, url.pathname);
+  if (denied) return json({ error: denied.error }, denied.status);
   // Compatibility for local callers and databases deployed before this binding.
   if (!env.MEAL_COMPUTE) return serviceHandle(request,env);
   const id = env.MEAL_COMPUTE.idFromName(await computeShard(request));

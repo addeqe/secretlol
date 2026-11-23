@@ -5,6 +5,32 @@ import {MealCompute} from '../worker/meal-compute.ts';
 import {COMPUTE_SHARDS,computeShard} from '../worker/compute-shard.ts';
 
 const token='test-compute-gateway-token-with-at-least-32-characters';
+test('the optional Grocer key reaches only price and matching reads through both Worker layers', async () => {
+  const grocerToken = 'test-grocer-price-token-with-at-least-32-characters';
+  const reviewToken = 'separate-review-token-with-at-least-32-characters';
+  const env = { CATALOG_API_TOKEN: token, GROCER_PRICE_API_TOKEN: grocerToken, INGREDIENT_REVIEW_TOKEN: reviewToken } as Env;
+  const object = new MealCompute({} as DurableObjectState, env);
+  const namespace = { idFromName(name: string) { return name; }, get() { return object; } };
+  const routed = { ...env, MEAL_COMPUTE: namespace } as unknown as Env;
+  const call = (method: string, path: string, key: string, workerEnv = routed) =>
+    handle(new Request('https://api.test' + path, { method, headers: { Authorization: `Bearer ${key}` } }), workerEnv);
+
+  const permitted = await call('GET', '/meal/status', grocerToken);
+  assert.equal(permitted.status, 503);
+  assert.deepEqual(await permitted.json(), { error: 'meal_database_not_connected' });
+  const lookup = await call('POST', '/meal/ingredients/lookup', grocerToken);
+  assert.deepEqual(await lookup.json(), { error: 'meal_database_not_connected' });
+  const denied = [
+    ['POST', '/ingredients/review'], ['POST', '/ingredients/refresh'], ['GET', '/catalog'],
+    ['POST', '/meal/quote'], ['POST', '/products/item'], ['GET', '/products/../catalog'],
+  ];
+  for (const [method, path] of denied) {
+    assert.equal((await call(method, path, grocerToken)).status, 401, `${method} ${path}`);
+  }
+  assert.equal((await call('GET', '/meal/status', grocerToken, { ...routed, GROCER_PRICE_API_TOKEN: undefined })).status, 401);
+  assert.deepEqual(await (await call('GET', '/meal/status', token)).json(), { error: 'meal_database_not_connected' });
+});
+
 test('gateway rejects unauthorized requests before compute or database access and streams authorized bodies unchanged',async()=>{
   let calls=0,body:string|null=null;
   const namespace={idFromName(name:string){assert.match(name,/^meal-compute-v1-\d+$/);return name;},get(){return{async fetch(request:Request){calls++;body=await request.text();return new Response('streamed-result',{headers:{'Content-Type':'application/json'}});}};}};

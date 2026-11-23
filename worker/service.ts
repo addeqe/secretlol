@@ -7,7 +7,7 @@ import { retailerRoutes, type RetailEnv } from './retailers.ts';
 import { initializeCoopParserRuntime } from '../src/retailers/coop-parser-runtime.ts';
 // Compile the small pure source parser before requests use the 10 ms CPU budget.
 initializeCoopParserRuntime();
-export type Env = { DB: D1Database; MEAL_DB?: D1Database; CATALOG_API_TOKEN: string;
+export type Env = { DB: D1Database; MEAL_DB?: D1Database; CATALOG_API_TOKEN: string; GROCER_PRICE_API_TOKEN?: string;
   GITHUB_REPOSITORY?: string; GITHUB_DISPATCH_TOKEN?: string; INGREDIENT_REVIEW_TOKEN?: string } & RetailEnv;
 type Snapshot = { id: string; store_id: string; store_name: string; completed_at: string;
   started_at: string; product_count: number; report_json: string;oldest_observation_at?:string };
@@ -59,13 +59,37 @@ async function requestJson(request: Request) {
   try { return JSON.parse(new TextDecoder().decode(bytes)); } catch { throw new Error('invalid_json'); }
 }
 const validCode = (value: unknown): value is string => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,100}$/.test(value);
+const grocerReadPaths = new Set(['/status', '/meal/status', '/meal/ingredients', '/retailers/coop/products']);
+
+function grocerPriceRoute(method: string, pathname: string): boolean {
+  if (method === 'POST') return pathname === '/meal/ingredients/lookup';
+  if (method !== 'GET') return false;
+  if (grocerReadPaths.has(pathname)) return true;
+  return pathname.startsWith('/products/') && validCode(pathname.slice('/products/'.length));
+}
+
+export function accessError(request: Request, env: Env, pathname: string) {
+  if (!env.CATALOG_API_TOKEN || env.CATALOG_API_TOKEN.length < 32) {
+    return { status: 503, error: 'service_not_connected' };
+  }
+  if (pathname === '/ingredients/review' || pathname === '/ingredients/refresh') {
+    if (!env.INGREDIENT_REVIEW_TOKEN || env.INGREDIENT_REVIEW_TOKEN.length < 32) {
+      return { status: 503, error: 'review_not_connected' };
+    }
+    return authorized(request, env.INGREDIENT_REVIEW_TOKEN) ? null : { status: 401, error: 'unauthorized' };
+  }
+  if (authorized(request, env.CATALOG_API_TOKEN)) return null;
+  const grocerToken = env.GROCER_PRICE_API_TOKEN;
+  if (grocerToken && grocerToken.length >= 32 && grocerPriceRoute(request.method, pathname)
+    && authorized(request, grocerToken)) return null;
+  return { status: 401, error: 'unauthorized' };
+}
+
 export async function handle(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   if (url.pathname === '/health' && request.method === 'GET') return json({ service: 'willys-catalog', ok: true });
-  if (!env.CATALOG_API_TOKEN || env.CATALOG_API_TOKEN.length < 32) return json({ error: 'service_not_connected' }, 503);
-  const reviewRoute=['/ingredients/review','/ingredients/refresh'].includes(url.pathname);
-  if(reviewRoute&&(!env.INGREDIENT_REVIEW_TOKEN||env.INGREDIENT_REVIEW_TOKEN.length<32))return json({error:'review_not_connected'},503);
-  if (!authorized(request, reviewRoute?env.INGREDIENT_REVIEW_TOKEN!:env.CATALOG_API_TOKEN)) return json({ error: 'unauthorized' }, 401);
+  const denied = accessError(request, env, url.pathname);
+  if (denied) return json({ error: denied.error }, denied.status);
   if(url.pathname.startsWith('/meal/'))return mealRoutes(request,env,requestJson);
   if(url.pathname==='/retailers'||url.pathname==='/retailers/openapi.json'||url.pathname==='/stores'||/^\/retailers\/(coop|ica)\/products$/.test(url.pathname))return retailerRoutes(request,env);
   let snapshot = await env.DB.prepare(`SELECT s.*,m.oldest_observation_at FROM snapshots s LEFT JOIN catalog_snapshot_storage m ON m.snapshot_id=s.id

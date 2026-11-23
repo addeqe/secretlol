@@ -106,9 +106,11 @@ const port = await new Promise<number>((resolvePort, reject) => {
 });
 const child = spawn(process.execPath, [cli, 'dev', '--local', '--config', config, '--persist-to', folder,
   '--port', String(port), '--ip', '127.0.0.1', '--inspector-port', '0', '--var', `CATALOG_API_TOKEN:${token}`,
-  '--var', `INGREDIENT_REVIEW_TOKEN:${token}-review`], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  '--var', `INGREDIENT_REVIEW_TOKEN:${token}-review`, '--var', `GROCER_PRICE_API_TOKEN:${token}-grocer`],
+  { env, stdio: ['ignore', 'pipe', 'pipe'] });
 let output = ''; child.stdout.on('data', data => { output += data; }); child.stderr.on('data', data => { output += data; });
 const base = `http://127.0.0.1:${port}`, headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+const grocerHeaders = { ...headers, Authorization: `Bearer ${token}-grocer` };
 try {
   let ready = false;
   for (let i = 0; i < 100; i++) {
@@ -120,6 +122,10 @@ try {
   assert.equal((await fetch(`${base}/status`)).status, 401);
   const status = await (await fetch(`${base}/status`, { headers })).json() as any;
   assert.equal(status.products, 2); assert.equal(status.store.id, 'TEST'); assert.equal(status.fresh, true);
+  const grocerProduct = await fetch(`${base}/products/TEST_MILK_ST`, { headers: grocerHeaders });
+  assert.equal(grocerProduct.status, 200);
+  assert.equal((await grocerProduct.json() as { storeId: string }).storeId, 'TEST');
+  assert.equal((await fetch(`${base}/catalog`, { headers: grocerHeaders })).status, 401);
   const list = await (await fetch(`${base}/catalog?limit=1`, { headers })).json() as any;
   assert.equal(list.products.length, 1); assert.ok(list.nextCursor);
   const next = await (await fetch(`${base}/catalog?limit=1&cursor=${encodeURIComponent(list.nextCursor)}`, { headers })).json() as any;
@@ -149,7 +155,7 @@ try {
   assert.equal(coop.connected,true);assert.equal(coop.configured,true);assert.equal(coop.referenceScope.storeId,retailScope.storeId);
   assert.equal(ica.connected,true);assert.equal(ica.configured,false);
   assert.equal((await fetch(`${base}/retailers/coop/products?ids=${milkProduct.id}`)).status,401);
-  const coopProducts=await(await fetch(`${base}/retailers/coop/products?ids=${milkProduct.id}`,{headers})).json() as any;
+  const coopProducts=await(await fetch(`${base}/retailers/coop/products?ids=${milkProduct.id}`,{headers:grocerHeaders})).json() as any;
   assert.equal(coopProducts.products[0].product.id,milkProduct.id);assert.equal(coopProducts.products[0].publicPriceUsable,true);
   assert.equal(coopProducts.products[0].product.pack.quantity,1000);assert.equal(coopProducts.products[0].price.amountOre,2990);
   assert.equal((await fetch(`${base}/stores?retailer=coop&postalCode=11455`,{headers})).status,503);

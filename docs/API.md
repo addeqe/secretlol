@@ -2,6 +2,8 @@
 
 All data endpoints require `Authorization: Bearer <CATALOG_API_TOKEN>`. Use your generated token on the server side. The unauthenticated `/health` endpoint only identifies the running service; it does not confirm a completed catalogue. Data responses use `Cache-Control: no-store`.
 
+The optional Worker secret `GROCER_PRICE_API_TOKEN` accepts a separate key of at least 32 characters on `GET /status`, `GET /meal/status`, `GET /products/{code}`, `GET /retailers/coop/products`, `GET /meal/ingredients`, and `POST /meal/ingredients/lookup`. The last route is a read-only batch lookup. Set that key as Grocer's server-side `PRICE_API_TOKEN`. The existing catalogue and ingredient-review keys keep their current access.
+
 | Endpoint | Result |
 | --- | --- |
 | `GET /health` | Service is running |
