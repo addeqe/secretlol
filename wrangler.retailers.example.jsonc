@@ -3,6 +3,7 @@
   "name": "willys-catalog",
   "main": "worker/index.ts",
   "compatibility_date": "2026-05-15",
+  "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "triggers": { "crons": ["17 4 * * *"] },
   "vars": {

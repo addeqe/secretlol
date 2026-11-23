@@ -2,8 +2,16 @@ name: Refresh Willys catalogue
 on:
   schedule:
     - cron: '17 4 * * *'
+    - cron: '17 5 * * *'
+    - cron: '17 6 * * *'
+    - cron: '17 7 * * *'
   workflow_dispatch:
     inputs:
+      scheduled_refresh:
+        description: Automatic refresh dispatched by the Cloudflare Worker
+        required: false
+        type: boolean
+        default: false
       connection_check:
         description: Check the database connection without collecting Willys products
         required: false
@@ -40,7 +48,7 @@ jobs:
       MAX_D1_ROWS_WRITTEN: '80000'
       MAX_D1_SIZE_MB: '400'
       HISTORY_DAYS: '90'
-      WILLYS_MANUAL_OUTSIDE_WINDOW: ${{ inputs.allow_outside_window }}
+      WILLYS_MANUAL_OUTSIDE_WINDOW: ${{ github.event_name == 'workflow_dispatch' && !inputs.scheduled_refresh && inputs.allow_outside_window }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -50,11 +58,15 @@ jobs:
       - name: Verify connection settings
         run: |
           node -e 'for (const k of ["CLOUDFLARE_ACCOUNT_ID","CLOUDFLARE_DATABASE_ID","CLOUDFLARE_API_TOKEN"]) if (!process.env[k]) throw new Error("Missing "+k)'
+      - name: Check automatic refresh window and snapshot
+        id: refresh
+        if: ${{ github.event_name == 'schedule' || inputs.scheduled_refresh }}
+        run: node scripts/check-catalogue-refresh.ts
       - name: Collect and publish catalogue
-        if: ${{ !inputs.connection_check && !inputs.connections_only }}
+        if: ${{ !inputs.connection_check && !inputs.connections_only && (steps.refresh.outcome == 'skipped' || steps.refresh.outputs.refresh == 'true') }}
         run: npm run sync
       - name: Refresh ingredient connections
-        if: ${{ !inputs.connection_check }}
+        if: ${{ !inputs.connection_check && (steps.refresh.outcome == 'skipped' || steps.refresh.outputs.refresh == 'true') }}
         run: |
           if [ "${{ inputs.connections_only }}" = "true" ]; then
             npm run ingredients:refresh
@@ -66,15 +78,15 @@ jobs:
         run: |
           node --input-type=module -e 'import {D1DatabaseClient} from "./src/database.ts"; await new D1DatabaseClient().query("SELECT value FROM catalog_state LIMIT 1"); console.log("D1 connection passed; no retailer requests made.")'
       - name: Build verified recipe search index within the free quota
-        if: ${{ success() && !inputs.connection_check }}
+        if: ${{ success() && !inputs.connection_check && (steps.refresh.outcome == 'skipped' || steps.refresh.outputs.refresh == 'true') }}
         env:
           MAX_D1_SIZE_MB: '480'
         run: npm run meal:search
       - name: Summarize completed scan
-        if: ${{ success() && !inputs.connection_check && !inputs.connections_only }}
+        if: ${{ success() && !inputs.connection_check && !inputs.connections_only && (steps.refresh.outcome == 'skipped' || steps.refresh.outputs.refresh == 'true') }}
         run: |
           node -e 'const fs=require("fs"); const s=JSON.parse(fs.readFileSync("data/last-scan-report.json")); const p=JSON.parse(fs.readFileSync("data/last-publication-report.json")); fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Store ${s.store.storeId}: ${s.products} online products; ${s.requests} requests; completed ${s.completedAt}. Catalogue changes: ${JSON.stringify(p.delta)}. D1: ${p.rowsRead} reads, ${p.rowsWritten} writes.\n`)'
       - name: Summarize ingredient connections
-        if: ${{ success() && !inputs.connection_check }}
+        if: ${{ success() && !inputs.connection_check && (steps.refresh.outcome == 'skipped' || steps.refresh.outputs.refresh == 'true') }}
         run: |
           node -e 'const fs=require("fs"); const r=JSON.parse(fs.readFileSync("data/last-ingredient-report.json")); fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Ingredients: ${r.requirements} names; ${r.ingredientOccurrences} occurrences tracked; ${(100*r.matchedFraction).toFixed(2)}% connected. Outcomes: ${JSON.stringify(r.occurrencesByStatus)}. Changed connections: ${r.changedLinks}; reused: ${r.unchangedLinks}. Combined D1: ${r.rowsRead} reads, ${r.rowsWritten} writes (connections: ${r.ingredientRowsWritten}).\n`)'

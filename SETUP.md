@@ -41,7 +41,7 @@ The Cloudflare token also needs the stated Workers permission to install the ser
 2. Choose **public** to use free standard Actions minutes. This publishes the project code; catalogue exports, database files and local credentials are ignored by Git. A private repository instead shares your account's included Actions quota. The wizard does not enable billing or configure larger runners.
 3. The wizard pushes the code and sets the Cloudflare credentials as repository Secrets, plus the Willys store ID as a repository Variable.
 4. When prompted, open [GitHub fine-grained tokens](https://github.com/settings/personal-access-tokens/new). Select the repository owner and **Only select repositories → willys-catalog**. Grant **Repository permissions → Actions → Read and write**. Metadata read access is automatic. If the repository belongs to an organization, its administrator may have to approve the token.
-5. Set a future expiry, record its renewal date, create the token and paste it into the wizard. The token is stored as a Worker secret for the Coop refresh and on-demand ingredient refresh. Willys uses GitHub Actions' own daily schedule, so its automatic catalogue run does not depend on this expiring token. It is also stored in your ignored `.env`; it is not committed to Git.
+5. Set a future expiry, record its renewal date, create the token and paste it into the wizard. The Worker uses this secret to start daily Willys and Coop refreshes and on-demand ingredient refreshes. The wizard also saves it in your ignored `.env`.
 
 The wizard verifies access to the workflow, starts a connection-only job that makes no retailer requests, and deploys the final connected configuration. Check that connection job succeeds in GitHub Actions. If you stop after Cloudflare setup, run `npm run connect:github` to finish later.
 
@@ -49,7 +49,7 @@ For a personal repository, `GITHUB_ACCOUNT` and the owner in `GITHUB_REPOSITORY`
 
 ## 4. First refresh and connection check
 
-GitHub Actions runs the Willys refresh daily at **04:17 UTC**: 06:17 in Stockholm during summer time, 05:17 during winter time. The Cloudflare Worker keeps its separate Coop trigger at 04:50 UTC.
+The Cloudflare Worker dispatches the Willys GitHub Actions workflow daily at **04:17 UTC** (06:17 in Stockholm during summer time, 05:17 during winter time). The Coop trigger stays at 04:50 UTC. GitHub also attempts dispatch at 04:17, 05:17, 06:17 and 07:17 UTC, using the same snapshot check. An automatic Willys run skips collection if it starts outside 04:00–07:50 UTC or if a complete catalogue has already been published for that UTC day.
 
 You can wait for the next scheduled morning, or open your repository's **Actions → Refresh Willys catalogue → Run workflow**. Leave **connection_check** unchecked to collect products. Manual runs have an **allow_outside_window** option to bypass time windows from the default **04:00–08:45 UTC** window and Willys' `robots.txt` `Visit-time`; it is off by default. The crawler still follows `Crawl-delay`, refuses `Disallow` paths, and enforces its request and runtime budgets. A scan can take tens of minutes because it follows Willys' request pacing.
 
@@ -59,7 +59,7 @@ Then run:
 npm run doctor
 ```
 
-This reports the connected database, API, product count, store name, last successful sync, freshness and GitHub-token access. Verify the Willys schedule under **GitHub → Actions → Refresh Willys catalogue**. The Cloudflare Worker cron is only used for the Coop refresh. A connection check does not dispatch a collection job outside the permitted window.
+This reports the connected database, API, product count, store name, last successful sync, freshness and GitHub-token access. Verify the Cloudflare dispatch under **GitHub → Actions → Refresh Willys catalogue**, then confirm that both the catalogue and ingredient-connection steps completed. If publication succeeded and the ingredient step failed, use the existing **connections_only** option to finish the refresh.
 
 If Cloudflare returns an authentication error, verify the account ID and token permissions. If the workflow is missing, verify the repository name and `main` branch. If the first scan is incomplete, the job reports why and keeps the previous catalogue. Do not fix that by publishing a partial scan.
 
@@ -78,7 +78,7 @@ The Matbord project at `/home/adde/Music/mealplanner` has been updated to send m
 ## Renewing credentials or changing settings
 
 - Renew the Cloudflare API token before expiry, update `.env`, then rerun `npm run connect:github`. The wizard updates the changed GitHub secret and preserves other completed steps.
-- Renew the GitHub fine-grained token before expiry, update `GITHUB_DISPATCH_TOKEN` in `.env`, then run `npm run deploy` to replace the Worker secret. This preserves Coop and on-demand ingredient dispatch; the Willys daily schedule does not depend on the token.
+- Renew the GitHub fine-grained token before expiry, update `GITHUB_DISPATCH_TOKEN` in `.env`, then run `npm run deploy` to replace the Worker secret used for both daily refreshes and on-demand ingredient dispatch.
 - Change the store ID before initial import. After importing, use a separate database for a different store; publication refuses to mix stores in one catalogue.
 - For private repositories, keep total Actions minutes inside your account's allowance and disable paid overages. At a maximum of 60 minutes/day, this job alone can use up to 1,860 minutes in a 31-day month. Your other jobs, retries and checks also count.
 - Stay on Cloudflare Free. Free-quota errors stop work; they do not trigger an automatic upgrade. Provider limits and free-plan terms can change.

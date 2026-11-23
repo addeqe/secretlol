@@ -61,7 +61,7 @@ export async function connectGitHub(progress = new SetupProgress(), options: Par
   const selectedStore = io.env.WILLYS_STORE_ID || '2110';
   await progress.run('GitHub store selection', fingerprint(repository, selectedStore), () => { run('gh', ['variable', 'set', 'WILLYS_STORE_ID', '--repo', repository, '--body', selectedStore]); });
   if (!io.env.GITHUB_DISPATCH_TOKEN) io.log(`Create a fine-grained token while signed in as ${account}: https://github.com/settings/personal-access-tokens/new\nSelect only ${repository}, with repository Actions: Read and write. Record its expiry date.`);
-  const dispatchToken = await answers.secret('GITHUB_DISPATCH_TOKEN', 'GitHub Worker dispatch token (Coop and manual ingredient refresh)');
+  const dispatchToken = await answers.secret('GITHUB_DISPATCH_TOKEN', 'GitHub Worker dispatch token (daily retailer and manual ingredient refresh)');
   await progress.run('GitHub trigger verification', fingerprint(repository, dispatchToken), async () => {
     const workflowUrl = `https://api.github.com/repos/${repository}/actions/workflows/sync.yml`;
     const headers = { Authorization: `Bearer ${dispatchToken}`, Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
@@ -85,7 +85,7 @@ export async function connectGitHub(progress = new SetupProgress(), options: Par
   });
   await progress.run('Daily refresh deployment', fingerprint(repository, dispatchToken, io.env.CLOUDFLARE_ACCOUNT_ID,
     io.env.CLOUDFLARE_DATABASE_ID, io.env.CATALOG_API_TOKEN, deploymentSource()), io.deploy);
-  io.log(`Willys refresh scheduled daily by GitHub Actions at 04:17 UTC. Workflow: https://github.com/${repository}/actions/workflows/sync.yml\nCheck the connection-only job in Actions. It makes no retailer requests.\nThe next scheduled morning will collect the catalogue; run it manually inside the crawl window if needed.`);
+  io.log(`Cloudflare starts the Willys refresh workflow daily at 04:17 UTC. Workflow: https://github.com/${repository}/actions/workflows/sync.yml\nCheck the connection-only job in Actions. It makes no retailer requests.\nCheck the next scheduled run for a published catalogue and matching ingredient connections.`);
 }
 if (process.argv[1] && import.meta.url === `file://${resolve(process.argv[1])}`) {
   try { await connectGitHub(); }

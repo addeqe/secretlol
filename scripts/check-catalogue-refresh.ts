@@ -33,7 +33,7 @@ async function main() {
     const output = process.env.GITHUB_OUTPUT;
     if (!output) throw new Error('GITHUB_OUTPUT is required');
     appendFileSync(output, 'refresh=false\n');
-    console.log('Scheduled start is too late to fit the configured run budget inside the Willys crawl window; no D1 query or retailer request made.');
+    console.log('::warning::Automatic Willys refresh started outside the safe start window. No D1 query or retailer request was made.');
     return;
   }
   const refresh = await shouldRefresh();

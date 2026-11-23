@@ -30,7 +30,7 @@ Verified catalogue absence decisions reopen if products, identities or availabil
 
 ## Automatic operation
 
-GitHub Actions starts `.github/workflows/sync.yml` daily at 04:17 UTC. This avoids making Willys' automatic refresh depend on a renewable GitHub token stored in the Cloudflare Worker. After a successful catalogue publication, the same job audits every ingredient and selects the lowest comparable listed price among compatible, available products. It uses current pack sizes and compares per kilogram, litre or piece, rather than comparing carton prices. Conditional discounts are not assumed. Store scope remains **2110, Willys Kungsbacka Hede**.
+The Cloudflare Worker dispatches `.github/workflows/sync.yml` daily at 04:17 UTC using its GitHub dispatch token. The workflow checks the permitted start window and the latest completed snapshot before collecting. After a successful catalogue publication, the same job audits every ingredient and selects the lowest comparable listed price among compatible, available products. It uses current pack sizes and compares per kilogram, litre or piece. Store scope remains **2110, Willys Kungsbacka Hede**.
 
 When a compatible product is discontinued, unavailable, stale or no longer cheapest, its connection changes on the next successful refresh. The tracker records product-ID/status changes for 90 days. Unknown foods can use multiple reviewed compatible alternatives; their cheapest eligible alternative wins. A completely new replacement for an unknown food still needs a food rule or review. A missing compatible alternative becomes an explicit unresolved outcome.
 
